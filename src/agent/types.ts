@@ -48,10 +48,8 @@ export function normalizeReasoningEffort(value: string | undefined | null): stri
 export interface AgentRunOptions {
     /** Model identifier to use for LLM calls */
     model: string;
-    /** OpenAI API key */
-    apiKey: string;
-    /** Base URL for OpenAI-compatible API */
-    baseUrl: string | undefined;
+    /** Provider route serving the selected model */
+    provider: string;
     /** Maximum number of tool interaction loops */
     maxLoops?: number;
     /** Reasoning effort resolved and injected by the caller; the runner does not read global configuration */

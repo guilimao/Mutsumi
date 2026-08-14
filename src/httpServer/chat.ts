@@ -6,7 +6,7 @@ import { RenderData, RenderBlock, MUTSUMI_AGENT_CHAT_MIME } from '../notebook/re
 import { ToolSet, ToolRegistry, createToolSetForAgent } from '../tools.d/toolManager';
 import { getAgentFromRegistry } from './utils';
 import { AgentFileOperations } from '../agent/fileOps';
-import { getModelCredentials, getDefaultModelSelection, resolveModelSelection } from '../utils';
+import { getDefaultModelSelection, resolveModelSelection } from '../utils';
 import {
     normalizeReasoningEffort,
     REASONING_EFFORT_SETTING_VALUES
@@ -111,17 +111,6 @@ export async function handleChat(
         return;
     }
 
-    // Get credentials for the resolved pair.
-    let credentials: { apiKey: string; baseUrl: string };
-    try {
-        credentials = getModelCredentials(effectiveSelection.model, effectiveSelection.provider);
-    } catch (err: any) {
-        res.status(400).json({ status: 'error', content: err.message });
-        return;
-    }
-    const { apiKey, baseUrl } = credentials;
-    // getModelCredentials guarantees apiKey and baseUrl are non-empty
-
     const effectiveModel = effectiveSelection.model;
     const effectiveProvider = effectiveSelection.provider;
     const reasoningEffort = normalizeReasoningEffort(
@@ -178,8 +167,6 @@ export async function handleChat(
     // Create session config
     const sessionConfig: AgentSessionConfig = {
         model: effectiveModel,
-        apiKey,
-        baseUrl,
         maxLoops,
         allowedUris,
         isSubAgent,
@@ -236,8 +223,7 @@ export async function handleChat(
     // Create AgentRunner options
     const runnerOptions = {
         model: effectiveModel,
-        apiKey,
-        baseUrl,
+        provider: effectiveProvider,
         maxLoops,
         reasoningEffort
     };

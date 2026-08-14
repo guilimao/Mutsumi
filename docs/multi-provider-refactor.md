@@ -1,6 +1,8 @@
 # Multi-Provider Configuration
 
-This document describes the implemented multi-provider configuration design in Mutsumi. It is not a future plan; it reflects the current behavior after the strict breaking refactor.
+> Superseded by the pi-ai provider registry and SecretStorage integration. `mutsumi.providers` and `mutsumi.models` below describe the one-release migration input only; do not add new API keys to settings. Use **Mutsumi: Manage Model Providers** and `mutsumi.customProviders` instead.
+
+This document is retained as a record of the legacy settings-based multi-provider design. The current runtime uses pi-ai catalogs, SecretStorage credentials, and automatic model discovery.
 
 ## Overview
 

@@ -10,7 +10,7 @@ import { AgentOrchestrator } from './agent/agentOrchestrator';
 import { NotebookAdapter } from './adapters/notebookAdapter';
 import { buildInteractionHistory } from './contextManagement/history';
 import { AgentMetadata } from './types';
-import { getModelCredentials, getDefaultModelSelection, resolveModelSelection } from './utils';
+import { getDefaultModelSelection, resolveModelSelection } from './utils';
 import { normalizeReasoningEffort } from './agent/types';
 import { t } from './i18n';
 
@@ -109,8 +109,6 @@ export class AgentController {
                 resourceUri: cell.document.uri,
                 config: {
                     model: metadataModel ?? '',
-                    apiKey: '',
-                    baseUrl: '',
                     metadata: notebook.metadata as AgentMetadata
                 }
             });
@@ -118,40 +116,16 @@ export class AgentController {
             (session as any).end(false);
             return;
         }
-
-        // Get credentials for the model
-        let credentials: { apiKey: string; baseUrl: string };
-        try {
-            credentials = getModelCredentials(model, provider);
-        } catch (err: any) {
-            const adapter = new NotebookAdapter(controller);
-            const session = await adapter.createSession({
-                resourceUri: cell.document.uri,
-                config: {
-                    model,
-                    apiKey: '',
-                    baseUrl: '',
-                    metadata: notebook.metadata as AgentMetadata
-                }
-            });
-            await session.replaceOutput(`Error: ${err.message}`);
-            (session as any).end(false);
-            return;
-        }
-        const { apiKey, baseUrl } = credentials;
 
         // Create adapter and session
         const adapter = new NotebookAdapter(controller);
         const session = await adapter.createSession({ 
             resourceUri: cell.document.uri, 
             config: { 
-                model, 
-                apiKey, 
-                baseUrl,
+                model,
                 metadata: notebook.metadata as AgentMetadata
             } 
         });
-        // getModelCredentials guarantees apiKey and baseUrl are non-empty
 
         // Get metadata and create tool set using the new Agent Type System
         const metadata = notebook.metadata as AgentMetadata;
@@ -179,7 +153,7 @@ export class AgentController {
 
             try {
                 const runner = new AgentRunner(
-                    { apiKey, baseUrl, model, reasoningEffort },
+                    { provider, model, reasoningEffort },
                     toolSet,
                     session
                 );

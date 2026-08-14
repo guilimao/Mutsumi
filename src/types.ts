@@ -4,19 +4,6 @@
  */
 
 /**
- * Provider configuration using snake_case for settings schema alignment.
- * @interface Provider
- */
-export interface Provider {
-    /** Provider name identifier */
-    name: string;
-    /** Base URL for the provider's API */
-    baseurl: string;
-    /** API key for the provider */
-    api_key: string;
-}
-
-/**
  * Explicit model + provider pair. Used throughout settings, configuration,
  * persistence, and execution to avoid ambiguous first-match resolution.
  * @interface ModelSelection
@@ -31,25 +18,12 @@ export interface ModelSelection {
 /**
  * Default providers used when user hasn't configured any providers.
  */
-export const DEFAULT_PROVIDERS: Provider[] = [
-    { name: "kimi-for-coding", baseurl: "https://api.kimi.com/coding/v1", api_key: "" }
-];
-
-/**
- * Default models configuration used when user hasn't configured any models.
- * Keys are provider names, values are arrays of model identifiers supported
- * by that provider.
- */
-export const DEFAULT_MODELS: Record<string, string[]> = {
-    "kimi-for-coding": ["kimi-for-coding"]
-};
-
 /**
  * Built-in default model selection pair.
  */
 export const DEFAULT_MODEL_SELECTION: ModelSelection = {
     model: "kimi-for-coding",
-    provider: "kimi-for-coding"
+    provider: "kimi-coding"
 };
 
 /**
@@ -135,8 +109,8 @@ export interface AgentMessage {
     name?: string;
     /** Reasoning/thinking content from the model */
     reasoning_content?: string;
-    /** Additional metadata for the message (e.g. ghost block state) */
-    metadata?: any;
+    /** Additional durable metadata, including versioned pi-ai replay state and ghost blocks. */
+    metadata?: import('./llm/types').LlmMessageMetadata & Record<string, any>;
 }
 
 /**

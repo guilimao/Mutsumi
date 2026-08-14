@@ -187,7 +187,7 @@ If the file does not exist, Mutsumi loads built-in defaults from `src/config/typ
     "agentTypes": {
         "chat": {
             "toolSets": ["read"],
-            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-for-coding" },
+            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-coding" },
             "defaultRules": ["default/chat.md"],
             "defaultSkills": [],
             "allowedChildTypes": [],
@@ -195,7 +195,7 @@ If the file does not exist, Mutsumi loads built-in defaults from `src/config/typ
         },
         "implementer": {
             "toolSets": ["read", "deliver", "dispatch"],
-            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-for-coding" },
+            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-coding" },
             "defaultRules": ["default/implementer.md"],
             "defaultSkills": [],
             "allowedChildTypes": ["implementer", "reviewer"],
@@ -203,7 +203,7 @@ If the file does not exist, Mutsumi loads built-in defaults from `src/config/typ
         },
         "orchestrator": {
             "toolSets": ["read", "deliver", "dispatch"],
-            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-for-coding" },
+            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-coding" },
             "defaultRules": ["default/orchestrator.md"],
             "defaultSkills": [],
             "allowedChildTypes": ["implementer", "reviewer"],
@@ -211,7 +211,7 @@ If the file does not exist, Mutsumi loads built-in defaults from `src/config/typ
         },
         "reviewer": {
             "toolSets": ["read"],
-            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-for-coding" },
+            "defaultModel": { "model": "kimi-for-coding", "provider": "kimi-coding" },
             "defaultRules": ["default/reviewer.md"],
             "defaultSkills": [],
             "allowedChildTypes": [],

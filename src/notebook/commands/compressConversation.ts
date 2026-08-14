@@ -11,7 +11,7 @@ import { createEmptyToolSet } from '../../tools.d/toolManager';
 import type { AgentRunOptions } from '../../agent/types';
 import { MutsumiSerializer } from '../serializer';
 import { formatMessagesToString, createDebugSessionFromNotebook } from './utils';
-import { getCompressModelSelection, getModelCredentials, resolveModelSelection } from '../../utils';
+import { getCompressModelSelection, resolveModelSelection } from '../../utils';
 import { t } from '../../i18n';
 
 /**
@@ -76,15 +76,6 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                 const compressModel = compressSelection.model;
                 const compressProvider = compressSelection.provider;
 
-                let credentials: { apiKey: string; baseUrl: string };
-                try {
-                    credentials = getModelCredentials(compressModel, compressProvider);
-                } catch (err: any) {
-                    vscode.window.showErrorMessage(t('compress.failed', err.message));
-                    return;
-                }
-                const { apiKey, baseUrl } = credentials;
-
                 // Build session and get full interaction history
                 const session = await createDebugSessionFromNotebook(editor.notebook, lastCodeCellIndex);
                 const { messages } = await buildInteractionHistory(session);
@@ -130,8 +121,6 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                     const adapter = new LiteAdapter();
                     const compressConfig: LiteAgentSessionConfig = {
                         model: compressModel,
-                        apiKey,
-                        baseUrl,
                         metadata: editor.notebook.metadata 
                             ? JSON.parse(JSON.stringify(editor.notebook.metadata)) as AgentMetadata 
                             : undefined
@@ -146,8 +135,7 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                     // Create agent runner
                     const runOptions: AgentRunOptions = {
                         model: compressModel,
-                        apiKey,
-                        baseUrl,
+                        provider: compressProvider,
                         maxLoops: 1 // Single round since no tools
                     };
                     const runner = new AgentRunner(runOptions, emptyToolSet, compressSession);

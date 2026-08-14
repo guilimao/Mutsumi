@@ -15,7 +15,7 @@ import { LLMClient } from './llmClient';
 import { IAgentSession, AgentSessionConfig } from '../adapters/interfaces';
 import { LiteAgentSession } from '../adapters/liteAdapter';
 import { debugLogger } from '../debugLogger';
-import { getModelCredentials, getTitleModelSelection } from '../utils';
+import { getTitleModelSelection } from '../utils';
 import { AgentRunOptions } from './types';
 import { t } from '../i18n';
 
@@ -64,10 +64,8 @@ export class AgentRunner {
         this.toolSet = toolSet;
         this.maxLoops = options.maxLoops || 30;
         this.llmClient = new LLMClient({
-            apiKey: options.apiKey,
-            baseUrl: options.baseUrl,
+            provider: options.provider,
             model: options.model,
-            defaultHeaders: { 'User-Agent': 'KimiCLI/1.30.0' },
             reasoningEffort: options.reasoningEffort
         });
         this.uiRenderer = new UIRenderer();
@@ -120,6 +118,7 @@ export class AgentRunner {
             let roundContent = '';
             let roundReasoning = '';
             let toolCalls: any[] = [];
+            let replayState: import('../llm/types').PiAiReplayState | undefined;
 
             try {
                 const result = await this.llmStreamHandler.streamResponse(
@@ -144,6 +143,7 @@ export class AgentRunner {
                 roundContent = result.roundContent;
                 roundReasoning = result.roundReasoning;
                 toolCalls = result.toolCalls;
+                replayState = result.replayState;
             } catch (error: any) {
                 // Handle network/API errors gracefully
                 const isCancellation = 
@@ -185,6 +185,7 @@ export class AgentRunner {
                 if (roundReasoning) {
                     msg.reasoning_content = roundReasoning;
                 }
+                if (replayState) msg.metadata = { ...msg.metadata, piAiReplay: replayState };
                 messages.push(msg);
                 newMessages.push(msg);
                 break;
@@ -195,6 +196,7 @@ export class AgentRunner {
                 if (roundReasoning) {
                     assistantMsg.reasoning_content = roundReasoning;
                 }
+                if (replayState) assistantMsg.metadata = { ...assistantMsg.metadata, piAiReplay: replayState };
                 messages.push(assistantMsg);
                 newMessages.push(assistantMsg);
                 break;
@@ -208,6 +210,7 @@ export class AgentRunner {
             if (roundReasoning) {
                 assistantMsgWithTool.reasoning_content = roundReasoning;
             }
+            if (replayState) assistantMsgWithTool.metadata = { ...assistantMsgWithTool.metadata, piAiReplay: replayState };
             messages.push(assistantMsgWithTool);
             newMessages.push(assistantMsgWithTool);
 

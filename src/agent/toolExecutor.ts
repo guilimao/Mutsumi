@@ -125,6 +125,7 @@ export class ToolExecutor {
 					tool_call_id: tc.id,
 					name: toolName,
 					content: `Error: invalid tool arguments JSON: ${err.message}`,
+					metadata: { isError: true },
 				});
 				continue;
 			}
@@ -154,6 +155,7 @@ export class ToolExecutor {
 			const shouldCache = this.toolSet.getShouldCache(toolName);
 
 			let toolResult = "";
+			let isError = false;
 			try {
 				if (shouldCache) {
 					const cached = getCachedResult(toolName, toolArgs);
@@ -176,8 +178,10 @@ export class ToolExecutor {
 				if (toolSession.isAborted) {
 					toolResult = `[Interrupted] The ${toolName} tool execution was forcibly stopped by the user.`;
 					shouldTerminate = true;
+					isError = true;
 				} else {
 					toolResult = `Error executing tool: ${err.message}`;
+					isError = true;
 				}
 			} finally {
 				abortSignal.removeEventListener("abort", onAgentAbort);
@@ -206,6 +210,7 @@ export class ToolExecutor {
 				tool_call_id: tc.id,
 				name: toolName,
 				content: toolResult,
+				metadata: { isError },
 			});
 		}
 		return { messages: toolMessages, shouldTerminate, isTaskComplete };

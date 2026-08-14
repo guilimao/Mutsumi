@@ -1,4 +1,4 @@
-import type OpenAI from "openai";
+import type { ToolDefinition } from "../tools.d/interface";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ITool, ToolContext } from "../tools.d/interface";
 import type { McpToolCaller } from "./interfaces";
@@ -9,7 +9,7 @@ import { getMcpToolExposedName, getMcpToolSchemaError, projectMcpToolResult } fr
 export class McpToolAdapter implements ITool {
 	readonly name: string;
 	readonly shouldCache = false;
-	readonly definition: OpenAI.Chat.ChatCompletionTool;
+	readonly definition: ToolDefinition;
 
 	readonly serverId: string;
 	readonly originalToolName: string;

@@ -10,7 +10,7 @@ import { AgentOrchestrator } from './agentOrchestrator';
 import { IAgentSession } from '../adapters/interfaces';
 import { LiteAdapter } from '../adapters/liteAdapter';
 import { createEmptyToolSet } from '../tools.d/toolManager';
-import { getModelCredentials, getTitleModelSelection, resolveModelSelection } from '../utils';
+import { getTitleModelSelection, resolveModelSelection } from '../utils';
 import type { AgentRunOptions } from './types';
 
 /**
@@ -112,8 +112,6 @@ export async function generateTitle(
     const session = await adapter.createSession({
         config: {
             model: config.model,
-            apiKey: config.apiKey,
-            baseUrl: config.baseUrl,
             metadata: sourceMetadata ? JSON.parse(JSON.stringify(sourceMetadata)) as AgentMetadata : undefined
         }
     });
@@ -124,8 +122,7 @@ export async function generateTitle(
     // Create runner options
     const runOptions: AgentRunOptions = {
         model: config.model,
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
+        provider: config.provider,
         maxLoops: 1 // Extra safety: limit to 1 loop
     };
 
@@ -247,21 +244,12 @@ export class TitleGenerator {
 
         const modelSelection = config.modelSelection!;
 
-        let credentials: { apiKey: string; baseUrl: string };
-        try {
-            credentials = getModelCredentials(modelSelection.model, modelSelection.provider);
-        } catch (err: any) {
-            console.error('Failed to generate session title:', err.message);
-            return undefined;
-        }
-
         try {
             // Get source metadata from notebook if available
             const sourceMetadata = notebook?.metadata as AgentMetadata | undefined;
             const title = await generateTitle(messages, {
-                apiKey: credentials.apiKey,
-                baseUrl: credentials.baseUrl,
-                model: modelSelection.model
+                model: modelSelection.model,
+                provider: modelSelection.provider
             }, sourceMetadata);
 
             await session.updateTitle(title);
@@ -302,19 +290,11 @@ export async function regenerateTitleForSession(
     // Validate the pair through the gate before use.
     resolveModelSelection(modelSelection);
 
-    let credentials: { apiKey: string; baseUrl: string };
-    try {
-        credentials = getModelCredentials(modelSelection.model, modelSelection.provider);
-    } catch (err: any) {
-        throw new Error(`Title generation failed: ${err.message}`);
-    }
-
     // Get source metadata from notebook if available
     const sourceMetadata = notebook?.metadata as AgentMetadata | undefined;
     const title = await generateTitle(messages, {
-        apiKey: credentials.apiKey,
-        baseUrl: credentials.baseUrl,
-        model: modelSelection.model
+        model: modelSelection.model,
+        provider: modelSelection.provider
     }, sourceMetadata);
 
     await session.updateTitle(title);

@@ -138,7 +138,7 @@ export class AgentFileOperations {
      *   'Process files',
      *   ['/workspace'],
      *   'implementer',
-     *   { model: 'kimi-for-coding', provider: 'kimi-for-coding' },
+     *   { model: 'kimi-for-coding', provider: 'kimi-coding' },
      *   []
      * );
      */

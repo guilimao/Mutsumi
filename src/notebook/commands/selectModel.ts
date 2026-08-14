@@ -6,7 +6,7 @@
 import * as vscode from 'vscode';
 import { normalizeReasoningEffort, REASONING_EFFORT_SETTING_VALUES } from '../../agent/types';
 import type { ReasoningEffortSetting } from '../../agent/types';
-import { getModelsConfig } from '../../utils';
+import { LlmProviderService } from '../../llm/providerService';
 import { t } from '../../i18n';
 
 /** QuickPick item representing a configured model. */
@@ -59,8 +59,23 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
                 return;
             }
             
-            const modelsConfig = getModelsConfig();
-            const providerEntries = Object.entries(modelsConfig);
+            const providerService = LlmProviderService.getInstance();
+            let availableModels: Awaited<ReturnType<typeof providerService.listAvailableModels>>;
+            try {
+                availableModels = await vscode.window.withProgress({
+                    location: vscode.ProgressLocation.Notification,
+                    title: t('selectModel.loading'),
+                }, () => providerService.listAvailableModels());
+            } catch (error: any) {
+                vscode.window.showErrorMessage(t('selectModel.loadFailed', error.message));
+                return;
+            }
+            const providerEntries = new Map<string, typeof availableModels>();
+            for (const model of availableModels) {
+                const entries = providerEntries.get(model.provider) ?? [];
+                entries.push(model);
+                providerEntries.set(model.provider, entries);
+            }
             
             const currentModel = editor.notebook.metadata?.model;
             const currentProvider = editor.notebook.metadata?.provider;
@@ -70,8 +85,8 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
 
             const modelItems: SelectModelQuickPickItem[] = [];
             let legacyMatched = false;
-            for (const [providerName, modelNames] of providerEntries) {
-                if (!Array.isArray(modelNames) || modelNames.length === 0) {
+            for (const [providerName, providerModels] of providerEntries) {
+                if (providerModels.length === 0) {
                     continue;
                 }
                 modelItems.push({
@@ -79,7 +94,8 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
                     label: providerName,
                     kind: vscode.QuickPickItemKind.Separator
                 });
-                for (const modelName of modelNames) {
+                for (const modelInfo of providerModels) {
+                    const modelName = modelInfo.id;
                     // When provider is stored in metadata, match on both model and provider.
                     // For legacy notebooks without a provider field, fall back to
                     // first-occurrence match on model name only.
@@ -98,6 +114,7 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
                         value: modelName,
                         provider: providerName,
                         label: modelName,
+                        description: modelInfo.name === modelName ? undefined : modelInfo.name,
                         detail,
                         picked: isCurrent
                     });
@@ -105,11 +122,27 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
             }
             
             if (modelItems.length === 0) {
-                vscode.window.showErrorMessage(t('selectModel.noModels'));
+                const manage = t('selectModel.manageProviders');
+                const action = await vscode.window.showWarningMessage(t('selectModel.noModels'), manage);
+                if (action === manage) await vscode.commands.executeCommand('mutsumi.manageProviders');
                 return;
             }
 
-            const effortItems: ReasoningEffortQuickPickItem[] = REASONING_EFFORT_SETTING_VALUES.map(value => ({
+            let supportedEfforts: readonly string[] = [];
+            if (currentModel && currentProvider) {
+                try {
+                    supportedEfforts = providerService.resolveSelection({
+                        model: currentModel,
+                        provider: currentProvider,
+                    }).modelInfo.reasoningEfforts;
+                } catch {
+                    supportedEfforts = [];
+                }
+            }
+            const effortValues = REASONING_EFFORT_SETTING_VALUES.filter(
+                value => value === 'default' || supportedEfforts.includes(value)
+            );
+            const effortItems: ReasoningEffortQuickPickItem[] = effortValues.map(value => ({
                 itemType: 'reasoningEffort',
                 value,
                 label: value === 'default' ? t('selectModel.effortDefault') : value,

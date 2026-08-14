@@ -275,21 +275,15 @@ code --install-extension mutsumi-[version].vsix
 
 ### Configuration
 
-Mutsumi defaults to the `kimi-for-coding` model. To get started, simply add your API key in VS Code: settings.
+Mutsumi defaults to the `kimi-for-coding` model on the built-in `kimi-coding` provider.
 
-Open your `settings.json` and add:
+1. Open the Command Palette and run **Mutsumi: Manage Model Providers**.
+2. Select Kimi Coding (or another built-in provider) and enter its API key.
+3. Run **Mutsumi: Select Model** to choose from providers that are authenticated by VS Code SecretStorage or a supported environment credential.
 
-```json
-"mutsumi.providers": [
-    {
-        "name": "kimi-for-coding",
-        "baseurl": "https://api.kimi.com/coding/v1",
-        "api_key": "sk-kimi-XXXXXXXXXXXXXXXXXXXXXX"
-    }
-]
-```
+Keys are entered through a password input and stored in VS Code SecretStorage. They are never written to settings, `.mtm` files, model caches, or logs. The provider manager also supports non-secret custom OpenAI-compatible routes and `/models` discovery.
 
-If you want to use a different model or provider, configure `mutsumi.providers` and `mutsumi.models` accordingly. See the setting descriptions in VS Code: for examples.
+Existing `mutsumi.providers` / `mutsumi.models` configurations are migration-only. On upgrade, accept the secure migration prompt or run **Mutsumi: Migrate Legacy Provider Credentials** manually. Rotate any key previously committed to version control.
 
 > **Note:** This Agent framework is specifically designed and optimized around the Kimi base model family. Using `kimi-for-coding` is highly recommended.
 

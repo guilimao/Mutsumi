@@ -14,10 +14,6 @@ import { GhostBlock } from '../contextManagement/interfaces';
 export interface AgentSessionConfig {
     /** Model identifier for the session (e.g. gpt-4o-mini) */
     model?: string;
-    /** API key for OpenAI-compatible endpoints */
-    apiKey?: string;
-    /** Base URL for OpenAI-compatible endpoints */
-    baseUrl?: string;
     /** Max tool/LLM loops allowed in a single run */
     maxLoops?: number;
     /** Allowed URI strings for tool access */

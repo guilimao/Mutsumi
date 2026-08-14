@@ -37,6 +37,8 @@ import { ToolSetRegistry } from "./registry/toolSetRegistry";
 import { AgentTypeRegistry } from "./registry/agentTypeRegistry";
 import { resolveAgentDefaults, getEntryAgentTypes } from "./config/resolver";
 import { McpRegistry } from "./mcp/registry";
+import { LlmProviderService } from "./llm/providerService";
+import { registerLegacyProviderMigration } from "./llm/migration";
 
 /**
  * Checks if a file exists at the given URI.
@@ -104,6 +106,11 @@ export async function activate(
 	// Initialize ToolRegistry (required for the new ToolSet architecture)
 	ToolRegistry.initialize();
 
+	// Provider catalogs and SecretStorage must exist before model defaults are resolved.
+	const llmProviderService = LlmProviderService.getInstance();
+	await llmProviderService.initialize(context);
+	registerLegacyProviderMigration(context);
+
 	// Validate configuration before changing either runtime registry, then connect MCP
 	// servers before agent creation can consume their discovery snapshots.
 	const mcpRegistry = McpRegistry.getInstance();
@@ -113,6 +120,14 @@ export async function activate(
 
 	let sidebarProvider: AgentSidebarProvider | undefined;
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(async (e: vscode.ConfigurationChangeEvent) => {
+		if (e.affectsConfiguration("mutsumi.customProviders")) {
+			try {
+				await llmProviderService.reload();
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				vscode.window.showErrorMessage(`Failed to reload model providers: ${message}`);
+			}
+		}
 		const mcpChanged = e.affectsConfiguration("mutsumi.mcpServers");
 		if (!mcpChanged && !e.affectsConfiguration("mutsumi.agentConfig")) return;
 		try {

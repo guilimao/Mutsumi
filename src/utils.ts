@@ -7,12 +7,10 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import {
-    Provider,
     ModelSelection,
-    DEFAULT_PROVIDERS,
-    DEFAULT_MODELS,
     DEFAULT_MODEL_SELECTION
 } from './types';
+import { LlmProviderService } from './llm/providerService';
 
 /**
  * Resolved model selection: the canonical { model, provider } pair plus the
@@ -20,8 +18,8 @@ import {
  * @interface ResolvedModelSelection
  */
 export interface ResolvedModelSelection extends ModelSelection {
-    /** The provider entry that matched the canonical provider name */
-    providerEntry: Provider;
+    /** Resolved model capability metadata */
+    modelInfo: import('./llm/types').ModelInfo;
 }
 
 /**
@@ -54,98 +52,7 @@ export function resolveModelSelection(selection: unknown): ResolvedModelSelectio
         throw new Error('Model selection "provider" must be a non-empty string');
     }
 
-    const config = vscode.workspace.getConfiguration('mutsumi');
-    let providers = config.get<Provider[]>('providers', []);
-    const models = getModelsConfig();
-
-    if (providers.length === 0) {
-        providers = DEFAULT_PROVIDERS;
-    }
-
-    // Check for duplicate provider names after trimming
-    const seenNames = new Set<string>();
-    for (const p of providers) {
-        const trimmedName = p.name.trim();
-        if (seenNames.has(trimmedName)) {
-            throw new Error(`Duplicate provider name after normalization: "${trimmedName}"`);
-        }
-        seenNames.add(trimmedName);
-    }
-
-    // Provider must exist by explicit name
-    const matchedProvider = providers.find(p => p.name.trim() === provider);
-    if (!matchedProvider) {
-        throw new Error(`Provider "${provider}" not found`);
-    }
-
-    // Provider must declare the requested model
-    let providerDeclaresModel = false;
-    for (const [pName, modelList] of Object.entries(models)) {
-        if (pName.trim() === provider && Array.isArray(modelList) && modelList.includes(model)) {
-            providerDeclaresModel = true;
-            break;
-        }
-    }
-    if (!providerDeclaresModel) {
-        throw new Error(`Model "${model}" is not declared by provider "${provider}"`);
-    }
-
-    return { model, provider, providerEntry: matchedProvider };
-}
-
-/**
- * Gets the provider credentials for a given model/provider pair.
- * @description Resolves and validates the pair through resolveModelSelection,
- * then reads the API key and base URL from the matched provider entry returned
- * by that single lookup. Provider is required; no first-match fallback is
- * performed.
- * @param {string} modelName - The model identifier
- * @param {string} providerName - The provider name (required)
- * @returns {{ apiKey: string; baseUrl: string }} Provider credentials with camelCase property names
- * @throws {Error} If provider not found, model not declared, or required fields are empty
- */
-export function getModelCredentials(modelName: string, providerName: string): { apiKey: string; baseUrl: string } {
-    const { provider, providerEntry } = resolveModelSelection({ model: modelName, provider: providerName });
-
-    const baseUrl = providerEntry.baseurl.trim();
-    if (!baseUrl) {
-        throw new Error(`Provider "${provider}" has empty baseurl`);
-    }
-
-    const apiKey = providerEntry.api_key;
-    if (!apiKey) {
-        throw new Error(`Provider "${provider}" has empty api_key`);
-    }
-
-    return { apiKey, baseUrl };
-}
-
-/**
- * Gets the models configuration from VS Code settings.
- * @description Returns user-configured models if available, otherwise returns
- * the built-in default models. The configuration maps provider names to arrays
- * of model identifiers supported by that provider.
- * @returns {Record<string, string[]>} Models configuration (provider name -> model identifiers)
- */
-export function getModelsConfig(): Record<string, string[]> {
-    const config = vscode.workspace.getConfiguration('mutsumi');
-    const models = config.get<Record<string, string[]>>('models', {});
-
-    if (Object.keys(models).length > 0) {
-        return models;
-    }
-
-    return DEFAULT_MODELS;
-}
-
-/**
- * Gets the list of all available model names from the models configuration.
- * @description Flattens the provider-to-models mapping and returns unique model names.
- * @returns {string[]} Array of unique model names
- */
-export function getAvailableModelNames(): string[] {
-    const models = getModelsConfig();
-    return [...new Set(Object.values(models).flat())];
+    return LlmProviderService.getInstance().resolveSelection({ model, provider });
 }
 
 /**

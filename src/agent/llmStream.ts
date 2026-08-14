@@ -4,6 +4,7 @@
  */
 
 import { LLMClient, StreamChunk } from './llmClient';
+import type { PiAiReplayState } from '../llm/types';
 
 /**
  * Callback function type for streaming progress updates.
@@ -25,6 +26,8 @@ export interface StreamResponseResult {
     roundReasoning: string;
     /** Parsed tool calls from the response */
     toolCalls: any[];
+    /** Provider-native state required to safely replay this assistant turn */
+    replayState?: PiAiReplayState;
 }
 
 /**
@@ -131,7 +134,7 @@ export class LLMStreamHandler {
                 }
                 
                 // Check if this is a retryable error
-                if (isRetryableError(error) && attempt < this.maxRetries) {
+                if (isRetryableError(error) && !(error as any)?.mutsumiPartialOutput && attempt < this.maxRetries) {
                     attempt++;
                     const delayMs = this.baseDelayMs * Math.pow(2, attempt - 1);
                     console.warn(`LLM stream failed, retrying (${attempt}/${this.maxRetries}) after ${delayMs}ms...`, error);
@@ -172,48 +175,61 @@ export class LLMStreamHandler {
 
         let currentRoundContent = '';
         let currentReasoningContent = '';
+        let replayState: PiAiReplayState | undefined;
         const toolCallBuffers: { [index: number]: any } = {};
-
-        for await (const chunk of stream) {
-            if (signal.aborted) {
-                break;
-            }
-
-            let progressUpdateNeeded = false;
-
-            // Accumulate reasoning content
-            if (chunk.reasoning_content) {
-                currentReasoningContent += chunk.reasoning_content;
-                progressUpdateNeeded = true;
-            }
-
-            // Accumulate regular content
-            if (chunk.content) {
-                currentRoundContent += chunk.content;
-                progressUpdateNeeded = true;
-            }
-
-            // Buffer tool calls from the stream
-            if (chunk.tool_calls) {
-                for (const tc of chunk.tool_calls) {
-                    const idx = tc.index ?? 0;
-                    if (!toolCallBuffers[idx]) {
-                        toolCallBuffers[idx] = { ...tc, arguments: '' };
-                    }
-                    if (tc.function?.name) {
-                        toolCallBuffers[idx].function.name = tc.function.name;
-                    }
-                    if (tc.function?.arguments) {
-                        toolCallBuffers[idx].function.arguments += tc.function.arguments;
-                    }
+        try {
+            for await (const chunk of stream) {
+                if (signal.aborted) {
+                    break;
                 }
-                progressUpdateNeeded = true;
-            }
 
-            // Call progress callback if provided and update is needed
-            if (progressUpdateNeeded && onProgress) {
-                onProgress(currentRoundContent, currentReasoningContent, Object.values(toolCallBuffers));
+                let progressUpdateNeeded = false;
+
+                if (chunk.replayState) replayState = chunk.replayState;
+
+                // Accumulate reasoning content
+                if (chunk.reasoning_content) {
+                    currentReasoningContent += chunk.reasoning_content;
+                    progressUpdateNeeded = true;
+                }
+
+                // Accumulate regular content
+                if (chunk.content) {
+                    currentRoundContent += chunk.content;
+                    progressUpdateNeeded = true;
+                }
+
+                // Buffer tool calls from the stream
+                if (chunk.tool_calls) {
+                    for (const tc of chunk.tool_calls) {
+                        const idx = tc.index ?? 0;
+                        if (!toolCallBuffers[idx]) {
+                            toolCallBuffers[idx] = { ...tc, arguments: '' };
+                        }
+                        if (tc.function?.name) {
+                            toolCallBuffers[idx].function.name = tc.function.name;
+                        }
+                        if (tc.function?.arguments) {
+                            toolCallBuffers[idx].function.arguments += tc.function.arguments;
+                        }
+                    }
+                    progressUpdateNeeded = true;
+                }
+
+                // Call progress callback if provided and update is needed
+                if (progressUpdateNeeded && onProgress) {
+                    onProgress(currentRoundContent, currentReasoningContent, Object.values(toolCallBuffers));
+                }
             }
+        } catch (error) {
+            if (currentRoundContent || currentReasoningContent || Object.keys(toolCallBuffers).length > 0) {
+                const marked = error instanceof Error && Object.isExtensible(error)
+                    ? error
+                    : new Error(error instanceof Error ? error.message : String(error), { cause: error });
+                (marked as any).mutsumiPartialOutput = true;
+                throw marked;
+            }
+            throw error;
         }
 
         const rawToolCalls = Object.values(toolCallBuffers);
@@ -222,7 +238,8 @@ export class LLMStreamHandler {
         return {
             roundContent: currentRoundContent,
             roundReasoning: currentReasoningContent,
-            toolCalls: finalToolCalls
+            toolCalls: finalToolCalls,
+            ...(replayState ? { replayState } : {})
         };
     }
 
