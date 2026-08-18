@@ -12,6 +12,8 @@ import { LiteAdapter } from '../adapters/liteAdapter';
 import { createEmptyToolSet } from '../tools.d/toolManager';
 import { getTitleModelSelection, resolveModelSelection } from '../utils';
 import type { AgentRunOptions } from './types';
+import type { AgentRunContext } from './types';
+import { assistantText, messageText } from '../llm/messageText';
 
 /**
  * Creates a deep clone of an object.
@@ -48,9 +50,8 @@ export function sanitizeFileName(name: string): string {
  * @param {AgentMessage[]} messages - Conversation message history
  * @returns {AgentMessage[]} Messages for title generation prompt
  */
-function createTitleGenerationMessages(messages: AgentMessage[]): AgentMessage[] {
-    // Filter out system messages and split into rounds
-    const dialogMessages = messages.filter(msg => msg.role !== 'system');
+function createTitleGenerationMessages(messages: AgentMessage[]): AgentRunContext {
+    const dialogMessages = messages;
     const rounds: AgentMessage[][] = [];
     let currentRound: AgentMessage[] = [];
 
@@ -72,22 +73,22 @@ function createTitleGenerationMessages(messages: AgentMessage[]): AgentMessage[]
     // Take last 6 rounds
     const recentRounds = rounds.length <= 6 ? rounds : rounds.slice(-6);
     const contextMessages = recentRounds.flat();
-    const contextJson = JSON.stringify(contextMessages, null, 2);
+    const visibleConversation = contextMessages
+        .map(message => `${message.role}: ${messageText(message)}`)
+        .join('\n\n');
 
-    return [
-        {
-            role: 'system',
-            content: 'Please generate a short title based on the following conversation content. ' +
+    return {
+        systemPrompt: 'Please generate a short title based on the following conversation content. ' +
                 'The title should summarize the main topic of the conversation. ' +
-                'Conversation data is provided in JSON format, containing messages from user, assistant, tool roles. ' +
+                'Conversation data contains visible text from user, assistant, and toolResult messages. ' +
                 'Requirements:\n1. Length should be 10-20 characters\n2. No special characters like \\\/:*?"<>|' +
-                '\n3. Return only the title text, no explanations or prefixes'
-        },
-        {
+                '\n3. Return only the title text, no explanations or prefixes',
+        messages: [{
             role: 'user',
-            content: `Please generate a title for this conversation:\n\n${contextJson.substring(0, 4000)}`
-        }
-    ];
+            content: `Please generate a title for this conversation:\n\n${visibleConversation.substring(0, 4000)}`,
+            timestamp: Date.now(),
+        }],
+    };
 }
 
 /**
@@ -134,13 +135,16 @@ export async function generateTitle(
 
     // Run the agent (will be single round since no tools)
     const abortController = new AbortController();
-    const newMessages = await runner.run(abortController, titleMessages);
+    const runResult = await runner.run(abortController, titleMessages);
+    if (runResult.status !== 'completed') {
+        throw new Error(runResult.error?.message ?? 'Title generation was cancelled');
+    }
 
     // The last assistant message contains the title
-    const lastAssistantMsg = [...newMessages].reverse().find(m => m.role === 'assistant');
+    const lastAssistantMsg = [...runResult.messages].reverse().find(m => m.role === 'assistant');
     let title = 'New Agent';
-    if (lastAssistantMsg?.content && typeof lastAssistantMsg.content === 'string') {
-        title = lastAssistantMsg.content.trim();
+    if (lastAssistantMsg) {
+        title = assistantText(lastAssistantMsg).trim();
     }
 
     // Sanitize the title
@@ -162,7 +166,7 @@ export function extractMessagesFromNotebook(notebook: vscode.NotebookDocument): 
     const messages: AgentMessage[] = [];
     for (const cell of notebook.getCells()) {
         if (cell.kind === vscode.NotebookCellKind.Code) {
-            messages.push({ role: 'user', content: cell.document.getText() });
+            messages.push({ role: 'user', content: cell.document.getText(), timestamp: Number(cell.metadata?.timestamp) || 0 });
             if (cell.metadata?.mutsumi_interaction) {
                 messages.push(...(cell.metadata.mutsumi_interaction as AgentMessage[]));
             }

@@ -9,6 +9,7 @@ import { AgentMessage, AgentMetadata } from '../../types';
 import { LiteAdapter, LiteAgentSessionConfig } from '../../adapters/liteAdapter';
 import { GhostBlock, GhostFileEntry } from '../../contextManagement/interfaces';
 import { decodeGhostBlock, removeGhostFiles } from '../../contextManagement/ghostBlocks';
+import { messageText } from '../../llm/messageText';
 
 /**
  * Builds NotebookEdits that strip ghost file entries from every cell's last_ghost_block.
@@ -74,25 +75,8 @@ export function formatMessagesToString(
         const msg = messages[i];
         content += `--- Message ${i + 1} [${msg.role.toUpperCase()}] ---\n\n`;
         
-        if (typeof msg.content === 'string') {
-            const displayContent = maxContentLength < msg.content.length 
-                ? msg.content.substring(0, maxContentLength) + '\n...(truncated)'
-                : msg.content;
-            content += displayContent;
-        } else if (Array.isArray(msg.content)) {
-            // Handle multi-modal content (text + images)
-            for (const part of msg.content) {
-                if (part.type === 'text') {
-                    const displayText = maxContentLength < part.text.length
-                        ? part.text.substring(0, maxContentLength) + '\n...(truncated)'
-                        : part.text;
-                    content += displayText;
-                } else if (part.type === 'image_url') {
-                    content += '[Image: ' + (part.image_url?.url?.substring(0, 50) || 'unknown') + '...]';
-                }
-                content += '\n';
-            }
-        }
+        const text = messageText(msg);
+        content += maxContentLength < text.length ? text.substring(0, maxContentLength) + '\n...(truncated)' : text;
         
         content += '\n\n';
     }
@@ -116,20 +100,19 @@ export async function createDebugSessionFromNotebook(
     const history: AgentMessage[] = [];
     for (let i = 0; i < cellIndex; i++) {
         const c = notebook.cellAt(i);
-        const role = c.metadata?.role || 'user';
+        const role = c.metadata?.role ?? (c.kind === vscode.NotebookCellKind.Code ? 'user' : 'assistant');
         const content = c.document.getText();
 
         if (content.trim()) {
             if (role === 'user') {
-                history.push({ role: 'user', content });
+                history.push({ role: 'user', content, timestamp: Number(c.metadata?.timestamp) || 0 });
                 // Expand mutsumi_interaction from user cell (contains assistant/tool messages)
                 const interaction = c.metadata?.mutsumi_interaction as AgentMessage[] | undefined;
                 if (interaction && Array.isArray(interaction)) {
                     history.push(...interaction);
                 }
             } else if (role === 'assistant') {
-                // Assistant cell content is directly in the cell value
-                history.push({ role: 'assistant', content });
+                throw new Error('Standalone assistant cells are not valid in .mtm format version 1');
             }
         }
     }

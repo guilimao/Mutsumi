@@ -1,5 +1,3 @@
-import type { Api, AssistantMessage } from '@earendil-works/pi-ai';
-
 /** Non-secret configuration for a user-defined OpenAI-compatible route. */
 export interface CustomProviderProfile {
     displayName?: string;
@@ -30,32 +28,4 @@ export interface ModelInfo {
     contextWindow: number;
     maxTokens: number;
     reasoningEfforts: readonly string[];
-}
-
-export type PiAiReplayBlock =
-    | { type: 'text'; text: string; textSignature?: string }
-    | { type: 'reasoning'; text: string; thinkingSignature?: string; redacted?: boolean }
-    | { type: 'tool-call'; id: string; name: string; arguments: Record<string, unknown>; thoughtSignature?: string };
-
-/** Versioned provider-native state required for safe multi-turn replay. */
-export interface PiAiReplayState {
-    kind: 'pi-ai';
-    version: 1;
-    api: Api;
-    provider: string;
-    model: string;
-    responseModel?: string;
-    responseId?: string;
-    stopReason: AssistantMessage['stopReason'];
-    blocks: PiAiReplayBlock[];
-}
-
-/** Metadata written on tool messages so providers receive correct error semantics. */
-export interface ToolMessageMetadata {
-    isError?: boolean;
-}
-
-/** Reserved Mutsumi metadata fields used by the LLM adapter. */
-export interface LlmMessageMetadata extends ToolMessageMetadata {
-    piAiReplay?: PiAiReplayState;
 }

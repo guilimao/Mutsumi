@@ -57,7 +57,7 @@ export class VsCodeCredentialStore implements CredentialStore {
         });
     }
 
-    /** Store a legacy API key without ever projecting it into ordinary settings. */
+    /** Store an API key without ever projecting it into ordinary settings. */
     async storeApiKey(providerId: string, key: string): Promise<void> {
         await this.modify(providerId, async current => ({
             type: 'api_key',

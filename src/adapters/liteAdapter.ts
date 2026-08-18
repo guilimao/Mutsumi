@@ -59,7 +59,7 @@ export class LiteAgentSession implements IAgentSession {
     }
 
     async getHistory(): Promise<AgentMessage[]> {
-        return this.history;
+        return [...this.history];
     }
 
     async appendOutput(content: string, _options?: { isMarkdown?: boolean; mimeType?: string }): Promise<void> {

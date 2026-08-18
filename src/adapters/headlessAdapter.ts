@@ -15,6 +15,7 @@ import {
 import type { AgentMessage, AgentMetadata, AgentContext, ContextItem } from '../types';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
+import { decodeAgentContext, encodeAgentContext } from '../mtmFormat';
 
 /**
  * Reads a reasoning effort override directly from an agent file.
@@ -23,7 +24,7 @@ import { isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
  */
 export async function readReasoningEffortFromFile(fileUri: vscode.Uri): Promise<string | undefined> {
     const content = await vscode.workspace.fs.readFile(fileUri);
-    const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
+    const data = decodeAgentContext(content);
     return data.metadata?.reasoning_effort;
 }
 
@@ -37,7 +38,7 @@ export async function writeReasoningEffortToFile(
     effort: string | undefined
 ): Promise<void> {
     const content = await vscode.workspace.fs.readFile(fileUri);
-    const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
+    const data = decodeAgentContext(content);
 
     if (effort === undefined || effort === 'default') {
         delete data.metadata.reasoning_effort;
@@ -45,7 +46,7 @@ export async function writeReasoningEffortToFile(
         data.metadata.reasoning_effort = effort;
     }
 
-    const encoded = new TextEncoder().encode(JSON.stringify(data, null, 2));
+    const encoded = encodeAgentContext(data);
     await vscode.workspace.fs.writeFile(fileUri, encoded);
 }
 
@@ -101,8 +102,9 @@ export class HeadlessAgentSession implements IAgentSession {
     private readonly tokenSource = new vscode.CancellationTokenSource();
     private readonly resourceUri?: vscode.Uri;
     private config: AgentSessionConfig;
-    private history: AgentMessage[] = [];  // Raw (unexpanded) history from file
-    private fullHistory: AgentMessage[] | undefined;  // Full expanded history from setHistory
+    private history: AgentMessage[] = [];
+    private historyLoaded = false;
+    private fullHistory: AgentMessage[] | undefined;
     private inputPrompt = '';
     private outputBuffer = '';
     private pendingGhostBlock?: GhostBlock | null;  // Ghost block for current message (applied on save)
@@ -126,13 +128,11 @@ export class HeadlessAgentSession implements IAgentSession {
     }
 
     async getHistory(): Promise<AgentMessage[]> {
-        if (this.resourceUri && this.history.length === 0) {
-            try {
+        if (this.resourceUri && !this.historyLoaded) {
                 const content = await vscode.workspace.fs.readFile(this.resourceUri);
-                const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
-                if (Array.isArray(data.context)) {
-                    this.history = data.context;
-                }
+                const data = decodeAgentContext(content);
+                this.history = data.context;
+                this.historyLoaded = true;
                 if (data.metadata) {
                     if (data.metadata.model && !this.config.model) {
                         this.config.model = data.metadata.model;
@@ -153,16 +153,14 @@ export class HeadlessAgentSession implements IAgentSession {
                         this.config.metadata.provider = data.metadata.provider;
                     }
                 }
-            } catch {
-                // Ignore, return cached history
-            }
         }
-        return this.history;
+        return [...this.history];
     }
 
     setHistory(history: AgentMessage[]): void {
-        // Store the full expanded history
         this.fullHistory = history;
+        this.history = history;
+        this.historyLoaded = true;
     }
 
     async appendOutput(content: string, _options?: { isMarkdown?: boolean; mimeType?: string }): Promise<void> {
@@ -182,14 +180,8 @@ export class HeadlessAgentSession implements IAgentSession {
 
         const serializer = new MutsumiSerializer();
         const tokenSource = new vscode.CancellationTokenSource();
-        let notebookData: vscode.NotebookData | undefined;
-
-        try {
-            const raw = await vscode.workspace.fs.readFile(this.resourceUri);
-            notebookData = await serializer.deserializeNotebook(raw, tokenSource.token);
-        } catch {
-            notebookData = new vscode.NotebookData([]);
-        }
+        const raw = await vscode.workspace.fs.readFile(this.resourceUri);
+        const notebookData = await serializer.deserializeNotebook(raw, tokenSource.token);
 
         if (!notebookData.metadata) {
             notebookData.metadata = {

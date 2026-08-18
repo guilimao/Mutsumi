@@ -86,8 +86,7 @@ export class NotebookAgentSession implements IAgentSession {
     public readonly id: string;
     public readonly token: vscode.CancellationToken;
     public readonly supportsUI = true;
-    private rawHistoryLength: number = 0;  // Length of raw (unexpanded) history from getHistory
-    private fullHistory: AgentMessage[] | undefined;  // Full expanded history set by setHistory
+    private fullHistory: AgentMessage[] | undefined;
     private config?: AgentSessionConfig;
     private pendingGhostBlock?: GhostBlock | null;
     private pendingContextItems?: ContextItem[];
@@ -118,37 +117,32 @@ export class NotebookAgentSession implements IAgentSession {
 
     async getHistory(): Promise<AgentMessage[]> {
         debugLogger.log('[NotebookAdapter.getHistory] ==== START ====');
-        // Build raw history from notebook cells
-        // Returns original stored messages WITHOUT expanding interactions
-        // This preserves metadata and maintains 1:1 correspondence with ghostBlocks
+        // Build canonical pi-ai history from notebook cells and their output interactions.
         const history: AgentMessage[] = [];
         const currentIndex = this.execution.cell.index;
         debugLogger.log(`[NotebookAdapter.getHistory] Current cell index: ${currentIndex}, iterating ${currentIndex} previous cells`);
 
         for (let i = 0; i < currentIndex; i++) {
             const cell = this.notebook.cellAt(i);
-            const role = cell.metadata?.role || 'user';
+            const role = cell.metadata?.role ?? (cell.kind === vscode.NotebookCellKind.Code ? 'user' : 'assistant');
             const content = cell.document.getText();
             debugLogger.log(`[NotebookAdapter.getHistory] Cell ${i}: kind=${cell.kind}, role=${role}, content length=${content.length}, metadata keys=${Object.keys(cell.metadata ?? {}).join(',')}`);
 
             if (content.trim()) {
                 if (role === 'user') {
-                    // User message - store with cell metadata if any
-                    history.push({
+                    const userMessage: AgentMessage = {
                         role: 'user',
                         content,
-                        metadata: cell.metadata
-                    });
+                        timestamp: Number(cell.metadata?.timestamp) || 0,
+                    };
+                    const ghostBlock = decodeGhostBlock(cell.metadata?.last_ghost_block);
+                    if (ghostBlock) userMessage.mutsumi = { ghostBlock };
+                    history.push(userMessage);
+                    const interaction = cell.metadata?.mutsumi_interaction;
+                    if (Array.isArray(interaction)) history.push(...interaction as AgentMessage[]);
                     debugLogger.log(`[NotebookAdapter.getHistory]   - Added user message, has interaction=${!!cell.metadata?.mutsumi_interaction}`);
                 } else if (role === 'assistant') {
-                    // Assistant message - preserve the full interaction in metadata
-                    // Do NOT expand here - buildInteractionHistory will handle expansion
-                    history.push({
-                        role: 'assistant',
-                        content,
-                        metadata: cell.metadata
-                    });
-                    debugLogger.log(`[NotebookAdapter.getHistory]   - Added assistant message, has interaction=${!!cell.metadata?.mutsumi_interaction}`);
+                    throw new Error('Standalone assistant cells are not valid in .mtm format version 1');
                 }
             } else {
                 debugLogger.log(`[NotebookAdapter.getHistory]   - Skipped empty content cell`);
@@ -170,10 +164,7 @@ export class NotebookAgentSession implements IAgentSession {
             this.config.metadata = JSON.parse(JSON.stringify(metadata)) as AgentMetadata;
         }
 
-        // Record raw history length to calculate diff for save()
-        // This is the count of raw (unexpanded) messages BEFORE AgentRunner adds new messages
-        this.rawHistoryLength = history.length;
-        debugLogger.log(`[NotebookAdapter.getHistory] ==== END, returning ${history.length} messages, rawHistoryLength=${this.rawHistoryLength} ====`);
+        debugLogger.log(`[NotebookAdapter.getHistory] ==== END, returning ${history.length} messages ====`);
 
         return history;
     }
@@ -209,7 +200,6 @@ export class NotebookAgentSession implements IAgentSession {
     }
 
     setHistory(messages: AgentMessage[]): void {
-        // Store the full expanded history (after buildInteractionHistory and AgentRunner processing)
         this.fullHistory = messages;
     }
 
@@ -239,6 +229,10 @@ export class NotebookAgentSession implements IAgentSession {
 
         // 2. Cell Metadata Update
         const newCellMetadata: any = { ...this.execution.cell.metadata };
+        if (!newCellMetadata.timestamp && this.fullHistory) {
+            const lastUser = [...this.fullHistory].reverse().find(message => message.role === 'user');
+            if (lastUser) newCellMetadata.timestamp = lastUser.timestamp;
+        }
 
         // Apply pending ghost block if any
         if (this.pendingGhostBlock !== undefined) {

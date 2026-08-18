@@ -14,6 +14,8 @@ import {
 import type { HeadlessAdapter } from '../adapters/headlessAdapter';
 import type { AgentSessionConfig } from '../adapters/interfaces';
 import type { AgentMessage, AgentMetadata, ModelSelection } from '../types';
+import { buildInteractionHistory } from '../contextManagement/history';
+import { isMtmFormatError } from '../mtmFormat';
 
 export async function handleChat(
     req: express.Request,
@@ -68,7 +70,16 @@ export async function handleChat(
 
     const serializer = new MutsumiSerializer();
     const tokenSource = new vscode.CancellationTokenSource();
-    const notebookData = await serializer.deserializeNotebook(content, tokenSource.token);
+    let notebookData: vscode.NotebookData;
+    try {
+        notebookData = await serializer.deserializeNotebook(content, tokenSource.token);
+    } catch (error) {
+        if (isMtmFormatError(error)) {
+            res.status(422).json({ status: 'error', code: error.code, content: error.message });
+            return;
+        }
+        throw error;
+    }
 
     // Get VS Code configuration
     const config = vscode.workspace.getConfiguration('mutsumi');
@@ -94,7 +105,7 @@ export async function handleChat(
         if (hasModel && hasProvider) {
             effectiveSelection = resolveModelSelection({ model, provider });
         } else {
-            // Use persisted pair. Missing model → global default; model without provider → migration error.
+            // Use persisted pair. Missing model → global default; model without provider is invalid.
             if (!metadataModel) {
                 effectiveSelection = getDefaultModelSelection();
             } else if (!metadataProvider) {
@@ -123,6 +134,10 @@ export async function handleChat(
         try {
             await AgentFileOperations.updateAgentModelSelection(fileUri, effectiveSelection);
         } catch (err: any) {
+            if (isMtmFormatError(err)) {
+                res.status(422).json({ status: 'error', code: err.code, content: err.message });
+                return;
+            }
             res.status(400).json({ status: 'error', content: err.message });
             return;
         }
@@ -195,7 +210,7 @@ export async function handleChat(
     (session as any).setInput(prompt);
 
     // Append user message to history
-    const userMessage: AgentMessage = { role: 'user', content: prompt };
+    const userMessage: AgentMessage = { role: 'user', content: prompt, timestamp: Date.now() };
 
     // Get existing history and append new user message
     const history = await session.getHistory();
@@ -207,7 +222,7 @@ export async function handleChat(
         prompt,
         'markdown'
     );
-    userCell.metadata = { role: 'user' };
+    userCell.metadata = { role: 'user', timestamp: userMessage.timestamp };
     const notebookDataWithUser = new vscode.NotebookData([
         ...notebookData.cells,
         userCell
@@ -217,8 +232,7 @@ export async function handleChat(
     const encoded = await serializer.serializeNotebook(notebookDataWithUser, tokenSource.token);
     await vscode.workspace.fs.writeFile(fileUri, encoded);
 
-    // Update session history
-    (session as any).setHistory(history);
+    const runHistory = await buildInteractionHistory(session);
 
     // Create AgentRunner options
     const runnerOptions = {
@@ -278,23 +292,32 @@ export async function handleChat(
         // Run the agent and stream results
         try {
             const runner = new AgentRunner(runnerOptions, toolSet, session);
-            const newMessages = await runner.run(abortController, history);
+            const runResult = await runner.run(abortController, {
+                systemPrompt: runHistory.systemPrompt,
+                messages: runHistory.messages,
+            });
 
-            // Update session with new history
-            const updatedHistory = [...history, ...newMessages];
+            // Persist the unanswered user turn and any fully completed native rounds.
+            const updatedHistory = [...runHistory.messages, ...runResult.messages];
             (session as any).setHistory(updatedHistory);
+            await session.save();
 
             isFinished = true;
 
-            // Send final event
-            const finalEvent = {
-                type: 'done',
-                messageCount: newMessages.length
-            };
+            const finalEvent = runResult.status === 'failed'
+                ? {
+                    type: 'error',
+                    code: runResult.error?.code ?? 'AGENT_RUN_FAILED',
+                    error: runResult.error?.message ?? 'Agent execution failed',
+                    messageCount: runResult.messages.length,
+                }
+                : runResult.status === 'cancelled'
+                    ? { type: 'cancelled', messageCount: runResult.messages.length }
+                    : { type: 'done', messageCount: runResult.messages.length };
             res.write(`data: ${JSON.stringify(finalEvent)}\n\n`);
             res.end();
 
-            console.log(`[Mutsumi] Agent ${uuid} streaming completed with ${newMessages.length} new messages`);
+            console.log(`[Mutsumi] Agent ${uuid} streaming ${runResult.status} with ${runResult.messages.length} new messages`);
         } catch (error: any) {
             console.error(`[Mutsumi] Agent ${uuid} streaming error:`, error);
             isFinished = true;
@@ -307,14 +330,7 @@ export async function handleChat(
             res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
             res.end();
 
-            // Append error as assistant message
-            const errorMessage: AgentMessage = {
-                role: 'assistant',
-                content: `> ⚠️ **Error**: ${error.message || String(error)}\n\n*Execution failed.*`
-            };
-            const errorHistory = [...history, errorMessage];
-            (session as any).setHistory(errorHistory);
-            await session.save();
+            // Incomplete/error assistant messages are never synthesized or persisted.
         } finally {
             abortControllers.delete(uuid);
             // Restore original method
@@ -325,26 +341,25 @@ export async function handleChat(
         void (async () => {
             try {
                 const runner = new AgentRunner(runnerOptions, toolSet, session!);
-                const newMessages = await runner.run(abortController, history);
+                const runResult = await runner.run(abortController, {
+                    systemPrompt: runHistory.systemPrompt,
+                    messages: runHistory.messages,
+                });
 
-                // Update session with new history
-                const updatedHistory = [...history, ...newMessages];
+                // Persist only fully completed native messages, regardless of final run status.
+                const updatedHistory = [...runHistory.messages, ...runResult.messages];
                 (session as any).setHistory(updatedHistory);
+                await session.save();
 
-                console.log(`[Mutsumi] Agent ${uuid} completed with ${newMessages.length} new messages`);
+                if (runResult.status === 'failed') {
+                    console.error(`[Mutsumi] Agent ${uuid} failed: ${runResult.error?.message ?? 'Unknown error'}`);
+                } else {
+                    console.log(`[Mutsumi] Agent ${uuid} ${runResult.status} with ${runResult.messages.length} new messages`);
+                }
             } catch (error: any) {
                 console.error(`[Mutsumi] Agent ${uuid} error:`, error);
 
-                // Append error as assistant message
-                const errorMessage: AgentMessage = {
-                    role: 'assistant',
-                    content: `> ⚠️ **Error**: ${error.message || String(error)}\n\n*Execution failed.*`
-                };
-                const errorHistory = [...history, errorMessage];
-                (session as any).setHistory(errorHistory);
-
-                // Persist error to file
-                await session!.save();
+                // Incomplete/error assistant messages are never synthesized or persisted.
             } finally {
                 abortControllers.delete(uuid);
             }

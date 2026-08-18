@@ -125,12 +125,6 @@
                 "icon": "$(key)"
             },
             {
-                "command": "mutsumi.migrateProviderCredentials",
-                "title": "%command.migrateProviderCredentials.title%",
-                "category": "Mutsumi",
-                "icon": "$(shield)"
-            },
-            {
                 "command": "mutsumi.renameSession",
                 "title": "%command.renameSession.title%",
                 "category": "Mutsumi",
@@ -410,46 +404,6 @@
         "configuration": {
             "title": "%configuration.title%",
             "properties": {
-                "mutsumi.providers": {
-                    "type": "array",
-                    "deprecationMessage": "Deprecated: use Mutsumi: Manage Model Providers. API keys are now stored in VS Code SecretStorage.",
-                    "markdownDescription": "%configuration.providers.markdownDescription%",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {
-                                "type": "string",
-                                "markdownDescription": "%configuration.providers.items.name.markdownDescription%"
-                            },
-                            "baseurl": {
-                                "type": "string",
-                                "markdownDescription": "%configuration.providers.items.baseurl.markdownDescription%"
-                            },
-                            "api_key": {
-                                "type": "string",
-                                "default": "",
-                                "markdownDescription": "%configuration.providers.items.api_key.markdownDescription%"
-                            }
-                        },
-                        "required": [
-                            "name",
-                            "baseurl",
-                            "api_key"
-                        ]
-                    },
-                    "default": []
-                },
-                "mutsumi.models": {
-                    "type": "object",
-                    "deprecationMessage": "Deprecated: built-in catalogs and custom provider model discovery replace this setting.",
-                    "markdownDescription": "%configuration.models.markdownDescription%",
-                    "additionalProperties": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
-                },
                 "mutsumi.customProviders": {
                     "type": "object",
                     "markdownDescription": "%configuration.customProviders.markdownDescription%",

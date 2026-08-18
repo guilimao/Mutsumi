@@ -3,6 +3,15 @@
  * @module types
  */
 
+import type {
+    AssistantMessage,
+    ImageContent,
+    TextContent,
+    ToolResultMessage,
+    UserMessage,
+} from '@earendil-works/pi-ai';
+import type { GhostBlock } from './contextManagement/interfaces';
+
 /**
  * Explicit model + provider pair. Used throughout settings, configuration,
  * persistence, and execution to avoid ambiguous first-match resolution.
@@ -15,9 +24,6 @@ export interface ModelSelection {
     provider: string;
 }
 
-/**
- * Default providers used when user hasn't configured any providers.
- */
 /**
  * Built-in default model selection pair.
  */
@@ -73,51 +79,43 @@ export interface AgentMetadata {
  * Text content part for multimodal messages.
  * @interface ContentPartText
  */
-export type ContentPartText = { type: 'text'; text: string };
+export type ContentPartText = TextContent;
 
 /**
  * Image content part for multimodal messages.
  * @interface ContentPartImage
  */
-export type ContentPartImage = { 
-    type: 'image_url'; 
-    image_url: { 
-        url: string; 
-        detail?: 'auto' | 'low' | 'high' 
-    } 
-};
+export type ContentPartImage = ImageContent;
 
 /**
  * Message content can be plain text or multimodal parts.
  */
-export type MessageContent = string | (ContentPartText | ContentPartImage)[];
+export type MessageContent = UserMessage['content'];
+
+/** Mutsumi-only state attached to persisted user messages. */
+export interface MutsumiUserMessageState {
+    ghostBlock?: GhostBlock;
+}
 
 /**
  * Message in an agent conversation.
  * @interface AgentMessage
  */
-export interface AgentMessage {
-    /** Role of the message sender */
-    role: 'user' | 'assistant' | 'system' | 'tool';
-    /** Message content, null if only tool calls */
-    content: MessageContent | null;
-    /** Tool calls requested by assistant */
-    tool_calls?: any[];
-    /** ID of the tool call this message responds to */
-    tool_call_id?: string;
-    /** Name of the tool being called */
-    name?: string;
-    /** Reasoning/thinking content from the model */
-    reasoning_content?: string;
-    /** Additional durable metadata, including versioned pi-ai replay state and ghost blocks. */
-    metadata?: import('./llm/types').LlmMessageMetadata & Record<string, any>;
-}
+export type AgentMessage =
+    | (UserMessage & { mutsumi?: MutsumiUserMessageState })
+    | AssistantMessage
+    | ToolResultMessage;
+
+/** Current, deliberately strict on-disk .mtm format version. */
+export const MTM_FORMAT_VERSION = 1 as const;
 
 /**
  * Complete agent context including metadata and conversation history.
  * @interface AgentContext
  */
 export interface AgentContext {
+    /** Required on-disk format discriminator. Unversioned files are unsupported. */
+    formatVersion: typeof MTM_FORMAT_VERSION;
     /** Agent metadata */
     metadata: AgentMetadata;
     /** Conversation message history */

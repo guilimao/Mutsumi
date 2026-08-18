@@ -47,7 +47,7 @@ export interface RenderData {
 - L1 跨轮锁定: `commitRoundUI()` → 所有 active 内容移入 committed
 - L2 轮内子段锁定:
   - reasoning → locked 当 content 开始到达
-  - content → locked 当 tool_calls 开始到达
+  - content → locked 当原生 `toolCall` 内容块开始到达
 - L3 工具级锁定: 每个工具执行完毕后 appendBlock 到 committed，前一个工具自然锁定
 
 **公开接口：**
@@ -173,8 +173,8 @@ const rendererCtx = await esbuild.context({
 ## LiteAdapter 分析结论
 
 LiteAdapter **不需要额外处理**。原因：
-- `generateTitle()` 和 `compressConversation` 从 `runner.run()` 返回的 `newMessages` 提取结果
-- `newMessages` 中的 `content` 直接来自 LLM 流式累积 (`roundContent`)，与 `replaceOutput`/`outputBuffer` 完全无关
+- `generateTitle()` 和 `compressConversation` 只在 `runner.run()` 返回 `completed` 时从原生 `messages` 提取结果
+- `messages` 中的 assistant 是 pi-ai 终态消息，与 `replaceOutput`/`outputBuffer` 完全无关
 - `getCurrentOutput()` 仅被 `httpServer/chat.ts` 调用 (HeadlessAdapter)，LiteAdapter 的 `outputBuffer` 无人外部读取
 
 ## SSE 改进 (Phase 2 方向，Phase 1 仅签名适配)
@@ -184,7 +184,9 @@ LiteAdapter **不需要额外处理**。原因：
 ```
 { event: 'block', data: RenderBlock JSON }
 { event: 'active', data: RenderData.active JSON }
-{ event: 'done', data: { messageCount: N } }
+{ type: 'done', messageCount: N }
+{ type: 'error', code: '...', error: '...', messageCount: N }
+{ type: 'cancelled', messageCount: N }
 ```
 Phase 1 仅适配 `replaceOutput` 签名，SSE delta 逻辑暂不动。
 

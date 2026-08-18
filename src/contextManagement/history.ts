@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AgentMessage, AgentMetadata, MessageContent, ContextItem } from '../types';
+import { AgentMessage, AgentMetadata, ContextItem } from '../types';
 import { IAgentSession } from '../adapters/interfaces';
 import { getSystemPrompt, getRulesContext } from './prompts';
 import { TemplateEngine } from './templateEngine';
@@ -27,7 +27,7 @@ import {
 export async function buildInteractionHistory(
     session: IAgentSession,
     currentPrompt?: string
-): Promise<{ messages: AgentMessage[], allowedUris: string[], isSubAgent: boolean }> {
+): Promise<{ systemPrompt: string, messages: AgentMessage[], allowedUris: string[], isSubAgent: boolean }> {
     // Get current prompt from session if not provided
     if (!currentPrompt) {
         currentPrompt = await session.getInput();
@@ -73,11 +73,6 @@ export async function buildInteractionHistory(
     if (skillsMarkdown && skillsMarkdown.trim()) {
         systemPromptContent += '\n\n# Installed Skills\n' + skillsMarkdown;
     }
-
-    messages.push({
-        role: 'system',
-        content: systemPromptContent
-    });
 
     // Get previous ghost blocks for version tracking
     const previousGhostBlocks = session.getPreviousGhostBlocks
@@ -164,14 +159,13 @@ export async function buildInteractionHistory(
     // Track ghost block index separately (only for user messages)
     let ghostBlockIndex = 0;
 
-    // Process raw history - expand interactions and attach ghost blocks
-    // NOTE: mutsumi_interaction ONLY exists on user messages, containing the
-    // assistant and tool messages that followed that user prompt
+    // Project persisted ghost blocks into provider-facing user content. The
+    // session already returns canonical, expanded pi-ai messages.
     for (const msg of history) {
         if (msg.role === 'user') {
-            const multiModalContent = await parseUserMessageWithImages(
-                typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
-            );
+            const multiModalContent = typeof msg.content === 'string'
+                ? await parseUserMessageWithImages(msg.content)
+                : [...msg.content];
             // Append the persisted ghost block if it exists
             const savedGhostBlock = previousGhostBlocks[ghostBlockIndex] ?? null;
             ghostBlockIndex++;
@@ -181,29 +175,14 @@ export async function buildInteractionHistory(
 
             if (savedGhostMarkdown) {
                 if (Array.isArray(multiModalContent)) {
-                    messages.push({ role: 'user', content: [...multiModalContent, { type: 'text', text: savedGhostMarkdown }] });
+                    messages.push({ role: 'user', content: [...multiModalContent, { type: 'text', text: savedGhostMarkdown }], timestamp: msg.timestamp });
                 } else {
-                    messages.push({ role: 'user', content: multiModalContent + savedGhostMarkdown });
+                    messages.push({ role: 'user', content: multiModalContent + savedGhostMarkdown, timestamp: msg.timestamp });
                 }
             } else {
-                messages.push({ role: 'user', content: multiModalContent });
+                messages.push({ role: 'user', content: multiModalContent, timestamp: msg.timestamp });
             }
-
-            // Expand mutsumi_interaction from user message metadata
-            // This contains the assistant response and any tool calls/results
-            const interaction = msg.metadata?.mutsumi_interaction as AgentMessage[] | undefined;
-            if (interaction && Array.isArray(interaction)) {
-                messages.push(...interaction);
-            }
-        } else if (msg.role === 'assistant') {
-            // Assistant messages in history are standalone (orphan messages without a preceding user)
-            // or legacy format. Add them directly.
-            messages.push(msg);
-        } else if (msg.role === 'system') {
-            // Skip, we already added system prompt
-            continue;
         } else {
-            // tool, etc. - add directly
             messages.push(msg);
         }
     }
@@ -228,13 +207,13 @@ export async function buildInteractionHistory(
     if (currentGhostMarkdown) {
         if (Array.isArray(currentMultiModalContent)) {
             currentMultiModalContent.push({ type: 'text', text: currentGhostMarkdown });
-            messages.push({ role: 'user', content: currentMultiModalContent });
+            messages.push({ role: 'user', content: currentMultiModalContent, timestamp: Date.now() });
         } else {
-            messages.push({ role: 'user', content: currentMultiModalContent + currentGhostMarkdown });
+            messages.push({ role: 'user', content: currentMultiModalContent + currentGhostMarkdown, timestamp: Date.now() });
         }
     } else {
-        messages.push({ role: 'user', content: currentMultiModalContent });
+        messages.push({ role: 'user', content: currentMultiModalContent, timestamp: Date.now() });
     }
 
-    return { messages, allowedUris, isSubAgent };
+    return { systemPrompt: systemPromptContent, messages, allowedUris, isSubAgent };
 }

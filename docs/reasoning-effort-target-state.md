@@ -158,11 +158,11 @@ body 新增可选 reasoning_effort：同一值域校验，瞬态覆盖本次请�
 
 **确认无需改动（已核实）：**
 - `src/agent/llmStream.ts`（只消费 stream，不组请求）
-- 渲染/序列化链路（`uiRenderer.ts` / `renderer.ts` / `serializer.ts`）：`reasoning_content` 的流式渲染、提交、`.mtm` round-trip 已完整存在
+- 渲染/序列化链路（`uiRenderer.ts` / `renderer.ts` / `serializer.ts`）：pi-ai `thinking` 内容块的流式渲染、提交、`.mtm` round-trip 已完整存在
 - `src/agent/fileOps.ts`（`sanitizeAgentFile` 保留未知 metadata key；新建 agent 无覆盖即不发送，符合 D4）
 - `src/agent/titleGenerator.ts`、`src/notebook/commands/compressConversation.ts`（D5：不传即默认，**零改动**——这是设计要求而非遗漏）
 - `src/notebook/commands/index.ts`、`src/notebook/toolbar.ts`（D8：无新命令，注册链不变）
-- Preserved Thinking 回传：`agentRunner` 已将 `reasoning_content` 写回 messages，天然满足 Kimi/DeepSeek 要求
+- Preserved Thinking 回传：`agentRunner` 直接保存 pi-ai 原生 assistant message 及其 thinking signatures，满足跨轮连续性要求
 
 ## 7. 边界与异常
 

@@ -85,7 +85,7 @@ export class AgentController {
         const reasoningEffort = normalizeReasoningEffort(notebook.metadata?.reasoning_effort);
 
         // Resolve model selection from metadata: complete pair → use; missing model → global default;
-        // model without provider → migration error.
+        // model without provider → invalid current-format metadata.
         let model: string;
         let provider: string;
         try {
@@ -158,17 +158,17 @@ export class AgentController {
                     session
                 );
 
-                const { messages: history } = await buildInteractionHistory(session);
-                const newMessages = await runner.run(abortController, history);
+                const history = await buildInteractionHistory(session);
+                const runResult = await runner.run(abortController, {
+                    systemPrompt: history.systemPrompt,
+                    messages: history.messages,
+                });
 
-                if (newMessages.length > 0) {
-                    // Update session history and persist
-                    // This delegates metadata updates (both Cell and Notebook) to the adapter
-                    session.setHistory([...history, ...newMessages]);
-                    await session.save();
-                }
+                // Persist the user turn, context metadata, and only fully formed native messages.
+                session.setHistory([...history.messages, ...runResult.messages]);
+                await session.save();
 
-                (session as any).end(true);
+                (session as any).end(runResult.status === 'completed');
             } catch (err: any) {
                 const isCancellation = 
                     err.name === 'APIUserAbortError' ||

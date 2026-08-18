@@ -26,9 +26,7 @@ const DEFAULT_CONTEXT_WINDOW = 262_144;
 const DEFAULT_MAX_TOKENS = 32_768;
 const DISCOVERY_LIMIT = 4 * 1024 * 1024;
 const DISCOVERY_TIMEOUT_MS = 15_000;
-const LEGACY_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
-    'kimi-for-coding': 'kimi-coding',
-};
+const REMOVED_PROVIDER_IDS = new Set(['kimi-for-coding']);
 const NO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 interface Snapshot {
@@ -84,9 +82,8 @@ export class LlmProviderService {
             models.setProvider(provider);
         }
         for (const [id, profile] of customProfiles) {
-            if (providers.has(id) || LEGACY_PROVIDER_ALIASES[id]) {
-                throw new Error(`Custom provider "${id}" conflicts with a built-in provider`);
-            }
+            if (providers.has(id)) throw new Error(`Custom provider "${id}" conflicts with a built-in provider`);
+            if (REMOVED_PROVIDER_IDS.has(id)) throw new Error(`Custom provider "${id}" uses a removed provider ID`);
             const provider = this.createCustomProvider(id, profile);
             providers.set(id, provider);
             models.setProvider(provider);
@@ -96,12 +93,8 @@ export class LlmProviderService {
         this.snapshot = { models, providers, customProfiles };
     }
 
-    canonicalProvider(provider: string): string {
-        return LEGACY_PROVIDER_ALIASES[provider] ?? provider;
-    }
-
     resolveSelection(selection: ModelSelection): ModelSelection & { modelInfo: ModelInfo } {
-        const provider = this.canonicalProvider(selection.provider.trim());
+        const provider = selection.provider.trim();
         const model = selection.model.trim();
         if (!provider || !model) throw new Error('Model and provider must be non-empty strings');
         const resolved = this.requireSnapshot().models.getModel(provider, model);
@@ -110,19 +103,17 @@ export class LlmProviderService {
     }
 
     getModel(provider: string, model: string): Model<Api> {
-        const canonical = this.canonicalProvider(provider);
-        const resolved = this.requireSnapshot().models.getModel(canonical, model);
-        if (!resolved) throw new Error(`Model "${model}" is not available from provider "${canonical}"`);
+        const resolved = this.requireSnapshot().models.getModel(provider, model);
+        if (!resolved) throw new Error(`Model "${model}" is not available from provider "${provider}"`);
         return resolved;
     }
 
     /** Capture the registry and model used by one request so config reloads cannot split it. */
     prepare(provider: string, model: string): { models: Models; model: Model<Api>; provider: string } {
         const snapshot = this.requireSnapshot();
-        const canonical = this.canonicalProvider(provider);
-        const resolved = snapshot.models.getModel(canonical, model);
-        if (!resolved) throw new Error(`Model "${model}" is not available from provider "${canonical}"`);
-        return { models: snapshot.models, model: resolved, provider: canonical };
+        const resolved = snapshot.models.getModel(provider, model);
+        if (!resolved) throw new Error(`Model "${model}" is not available from provider "${provider}"`);
+        return { models: snapshot.models, model: resolved, provider };
     }
 
     async listProviders(): Promise<ProviderInfo[]> {
@@ -179,28 +170,26 @@ export class LlmProviderService {
 
     listModels(provider: string): ModelInfo[] {
         return this.requireSnapshot().models
-            .getModels(this.canonicalProvider(provider))
+            .getModels(provider)
             .map(model => this.toModelInfo(model));
     }
 
     isBuiltInProviderId(provider: string): boolean {
-        const canonical = this.canonicalProvider(provider);
         const snapshot = this.requireSnapshot();
-        return snapshot.providers.has(canonical) && !snapshot.customProfiles.has(canonical);
+        return snapshot.providers.has(provider) && !snapshot.customProfiles.has(provider);
     }
 
     async configureApiKey(provider: string, interaction: AuthInteraction): Promise<Error | undefined> {
-        const canonical = this.canonicalProvider(provider);
         const snapshot = this.requireSnapshot();
-        const entry = snapshot.providers.get(canonical);
-        if (!entry?.auth.apiKey?.login) throw new Error(`Provider "${canonical}" does not support API-key setup`);
-        await snapshot.models.login(canonical, 'api_key', interaction);
-        if (entry.refreshModels) return (await this.refreshModels()).get(canonical);
+        const entry = snapshot.providers.get(provider);
+        if (!entry?.auth.apiKey?.login) throw new Error(`Provider "${provider}" does not support API-key setup`);
+        await snapshot.models.login(provider, 'api_key', interaction);
+        if (entry.refreshModels) return (await this.refreshModels()).get(provider);
         return undefined;
     }
 
     async deleteCredential(provider: string): Promise<void> {
-        await this.requireSnapshot().models.logout(this.canonicalProvider(provider));
+        await this.requireSnapshot().models.logout(provider);
     }
 
     async refreshModels(): Promise<ReadonlyMap<string, Error>> {
@@ -209,7 +198,7 @@ export class LlmProviderService {
     }
 
     async deleteCachedModels(provider: string): Promise<void> {
-        await this.requireModelsStore().delete(this.canonicalProvider(provider));
+        await this.requireModelsStore().delete(provider);
     }
 
     getCredentialStore(): VsCodeCredentialStore {
