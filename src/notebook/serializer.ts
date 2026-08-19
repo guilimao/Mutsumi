@@ -108,7 +108,7 @@ export function messagesToGenericCells(messages: AgentMessage[]): GenericCellDat
             cells.push(cell);
             debugLogger.log(`[messagesToGenericCells]   - Added user cell #${cells.length}`);
         } else {
-            throw new Error('Standalone assistant/toolResult messages are not valid in .mtm format version 1');
+            throw new Error(t('serializer.standaloneMessagesUnsupported', MTM_FORMAT_VERSION));
         }
     }
 
@@ -160,7 +160,7 @@ export function genericCellsToMessages(cells: GenericCellData[]): AgentMessage[]
                 debugLogger.log(`[genericCellsToMessages]   - Expanded interaction: ${cell.metadata.mutsumi_interaction.length} messages`);
             }
         } else {
-            throw new Error('Standalone assistant cells cannot be serialized in .mtm format version 1');
+            throw new Error(t('serializer.standaloneAssistantSerializationUnsupported', MTM_FORMAT_VERSION));
         }
     }
 

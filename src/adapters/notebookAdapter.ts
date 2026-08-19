@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import { IAgentAdapter, IAgentSession, CreateSessionOptions, AgentSessionConfig } from './interfaces';
-import { AgentMessage, AgentMetadata, ContextItem } from '../types';
+import { AgentMessage, AgentMetadata, ContextItem, MTM_FORMAT_VERSION } from '../types';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { decodeGhostBlock, isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
 import { debugLogger } from '../debugLogger';
 import { readReasoningEffortFromFile, writeReasoningEffortToFile } from './headlessAdapter';
+import { t } from '../i18n';
 
 export class NotebookAdapter implements IAgentAdapter {
     constructor(
@@ -142,7 +143,7 @@ export class NotebookAgentSession implements IAgentSession {
                     if (Array.isArray(interaction)) history.push(...interaction as AgentMessage[]);
                     debugLogger.log(`[NotebookAdapter.getHistory]   - Added user message, has interaction=${!!cell.metadata?.mutsumi_interaction}`);
                 } else if (role === 'assistant') {
-                    throw new Error('Standalone assistant cells are not valid in .mtm format version 1');
+                    throw new Error(t('serializer.standaloneAssistantCellUnsupported', MTM_FORMAT_VERSION));
                 }
             } else {
                 debugLogger.log(`[NotebookAdapter.getHistory]   - Skipped empty content cell`);

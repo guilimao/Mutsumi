@@ -5,11 +5,12 @@
 
 import * as vscode from 'vscode';
 import { IAgentSession } from '../../adapters/interfaces';
-import { AgentMessage, AgentMetadata } from '../../types';
+import { AgentMessage, AgentMetadata, MTM_FORMAT_VERSION } from '../../types';
 import { LiteAdapter, LiteAgentSessionConfig } from '../../adapters/liteAdapter';
 import { GhostBlock, GhostFileEntry } from '../../contextManagement/interfaces';
 import { decodeGhostBlock, removeGhostFiles } from '../../contextManagement/ghostBlocks';
 import { messageText } from '../../llm/messageText';
+import { t } from '../../i18n';
 
 /**
  * Builds NotebookEdits that strip ghost file entries from every cell's last_ghost_block.
@@ -112,7 +113,7 @@ export async function createDebugSessionFromNotebook(
                     history.push(...interaction);
                 }
             } else if (role === 'assistant') {
-                throw new Error('Standalone assistant cells are not valid in .mtm format version 1');
+                throw new Error(t('serializer.standaloneAssistantCellUnsupported', MTM_FORMAT_VERSION));
             }
         }
     }

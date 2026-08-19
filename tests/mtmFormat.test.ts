@@ -19,7 +19,7 @@ vi.mock('vscode', () => ({
 
 import { toPiContext } from '../src/llm/context';
 import { decodeAgentContext, encodeAgentContext, INVALID_MTM_FILE, UNSUPPORTED_MTM_FORMAT } from '../src/mtmFormat';
-import type { AgentContext, AgentMessage } from '../src/types';
+import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage } from '../src/types';
 import { genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
 import { parseUserMessageWithImages } from '../src/contextManagement/utils';
 
@@ -44,7 +44,7 @@ const assistant: AssistantMessage = {
 
 function context(messages: AgentMessage[]): AgentContext {
     return {
-        formatVersion: 1,
+        formatVersion: MTM_FORMAT_VERSION,
         metadata: {
             uuid: 'agent-1', name: 'Agent', created_at: '2026-01-01T00:00:00.000Z',
             parent_agent_id: null, allowed_uris: ['/'], provider: 'anthropic', model: 'claude-test',
@@ -53,7 +53,7 @@ function context(messages: AgentMessage[]): AgentContext {
     };
 }
 
-describe('.mtm format version 1', () => {
+describe(`.mtm format version ${MTM_FORMAT_VERSION}`, () => {
     it('round-trips native signed assistant and tool-result messages without replay duplication', () => {
         const source = context([
             { role: 'user', content: 'read it', timestamp: 1, mutsumi: { ghostBlock: { files: [], tools: [] } } },
@@ -76,9 +76,10 @@ describe('.mtm format version 1', () => {
     it('rejects unversioned and old-shaped messages', () => {
         expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify({ metadata: {}, context: [] }))))
             .toThrow(expect.objectContaining({ code: UNSUPPORTED_MTM_FORMAT }));
-        const wrongVersion = { ...context([]), formatVersion: 2 };
+        const unsupportedVersion = MTM_FORMAT_VERSION + 1;
+        const wrongVersion = { ...context([]), formatVersion: unsupportedVersion };
         expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify(wrongVersion))))
-            .toThrow(expect.objectContaining({ code: UNSUPPORTED_MTM_FORMAT, actualVersion: 2 }));
+            .toThrow(expect.objectContaining({ code: UNSUPPORTED_MTM_FORMAT, actualVersion: unsupportedVersion }));
         const old = context([]) as any;
         old.context = [{ role: 'tool', tool_call_id: 'call-1', content: 'old' }];
         expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify(old))))

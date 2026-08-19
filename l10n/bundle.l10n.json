@@ -162,6 +162,9 @@
 	"providers.failed": "Provider management failed: {0}",
 	"serializer.unsupportedFormat": "Unsupported .mtm format (expected {0}, received {1}). Convert this file with the standalone migration tool before opening it.",
 	"serializer.invalidFormat": "Invalid .mtm file: {0}",
+	"serializer.standaloneMessagesUnsupported": "Standalone assistant/toolResult messages are not valid in .mtm format version {0}",
+	"serializer.standaloneAssistantSerializationUnsupported": "Standalone assistant cells cannot be serialized in .mtm format version {0}",
+	"serializer.standaloneAssistantCellUnsupported": "Standalone assistant cells are not valid in .mtm format version {0}",
 
 	"renameSession.prompt": "Enter new session title (leave empty to auto-generate)",
 	"renameSession.renamed": "Session renamed: {0}",

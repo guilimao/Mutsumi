@@ -162,6 +162,9 @@
 	"providers.failed": "提供商管理失败：{0}",
 	"serializer.unsupportedFormat": "不支持的 .mtm 格式（应为 {0}，实际为 {1}）。请先使用独立迁移工具转换此文件。",
 	"serializer.invalidFormat": ".mtm 文件无效：{0}",
+	"serializer.standaloneMessagesUnsupported": "独立的 assistant/toolResult 消息不适用于 .mtm 格式版本 {0}",
+	"serializer.standaloneAssistantSerializationUnsupported": "独立的 assistant 单元格无法序列化为 .mtm 格式版本 {0}",
+	"serializer.standaloneAssistantCellUnsupported": "独立的 assistant 单元格不适用于 .mtm 格式版本 {0}",
 
 	"renameSession.prompt": "输入新的会话标题（留空则自动生成）",
 	"renameSession.renamed": "会话已重命名: {0}",
