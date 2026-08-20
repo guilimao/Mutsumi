@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import { IAgentAdapter, IAgentSession, CreateSessionOptions, AgentSessionConfig } from './interfaces';
-import { AgentMessage, AgentMetadata, ContextItem, MTM_FORMAT_VERSION } from '../types';
+import { AgentMetadata, ContextItem, PersistedAgentMessage } from '../types';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { decodeGhostBlock, isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
 import { debugLogger } from '../debugLogger';
 import { readReasoningEffortFromFile, writeReasoningEffortToFile } from './headlessAdapter';
-import { t } from '../i18n';
+import { parsePersistedInteraction } from '../mtmFormat';
 
 export class NotebookAdapter implements IAgentAdapter {
     constructor(
@@ -87,7 +87,7 @@ export class NotebookAgentSession implements IAgentSession {
     public readonly id: string;
     public readonly token: vscode.CancellationToken;
     public readonly supportsUI = true;
-    private fullHistory: AgentMessage[] | undefined;
+    private fullHistory: PersistedAgentMessage[] | undefined;
     private config?: AgentSessionConfig;
     private pendingGhostBlock?: GhostBlock | null;
     private pendingContextItems?: ContextItem[];
@@ -116,38 +116,37 @@ export class NotebookAgentSession implements IAgentSession {
         return this.execution.cell.document.getText();
     }
 
-    async getHistory(): Promise<AgentMessage[]> {
+    async getHistory(): Promise<PersistedAgentMessage[]> {
         debugLogger.log('[NotebookAdapter.getHistory] ==== START ====');
-        // Build canonical pi-ai history from notebook cells and their output interactions.
-        const history: AgentMessage[] = [];
+        // Build persisted history from Code cells and their validated output interactions.
+        const history: PersistedAgentMessage[] = [];
         const currentIndex = this.execution.cell.index;
         debugLogger.log(`[NotebookAdapter.getHistory] Current cell index: ${currentIndex}, iterating ${currentIndex} previous cells`);
 
         for (let i = 0; i < currentIndex; i++) {
             const cell = this.notebook.cellAt(i);
-            const role = cell.metadata?.role ?? (cell.kind === vscode.NotebookCellKind.Code ? 'user' : 'assistant');
             const content = cell.document.getText();
-            debugLogger.log(`[NotebookAdapter.getHistory] Cell ${i}: kind=${cell.kind}, role=${role}, content length=${content.length}, metadata keys=${Object.keys(cell.metadata ?? {}).join(',')}`);
+            debugLogger.log(`[NotebookAdapter.getHistory] Cell ${i}: kind=${cell.kind}, content length=${content.length}, metadata keys=${Object.keys(cell.metadata ?? {}).join(',')}`);
 
-            if (content.trim()) {
-                if (role === 'user') {
-                    const userMessage: AgentMessage = {
-                        role: 'user',
-                        content,
-                        timestamp: Number(cell.metadata?.timestamp) || 0,
-                    };
-                    const ghostBlock = decodeGhostBlock(cell.metadata?.last_ghost_block);
-                    if (ghostBlock) userMessage.mutsumi = { ghostBlock };
-                    history.push(userMessage);
-                    const interaction = cell.metadata?.mutsumi_interaction;
-                    if (Array.isArray(interaction)) history.push(...interaction as AgentMessage[]);
-                    debugLogger.log(`[NotebookAdapter.getHistory]   - Added user message, has interaction=${!!cell.metadata?.mutsumi_interaction}`);
-                } else if (role === 'assistant') {
-                    throw new Error(t('serializer.standaloneAssistantCellUnsupported', MTM_FORMAT_VERSION));
-                }
-            } else {
-                debugLogger.log(`[NotebookAdapter.getHistory]   - Skipped empty content cell`);
+            if (cell.kind !== vscode.NotebookCellKind.Code) {
+                debugLogger.log(`[NotebookAdapter.getHistory]   - Skipped Markup note`);
+                continue;
             }
+
+            const userMessage: PersistedAgentMessage = {
+                role: 'user',
+                content,
+                timestamp: cell.metadata?.timestamp,
+            };
+            const ghostBlock = decodeGhostBlock(cell.metadata?.last_ghost_block);
+            if (ghostBlock) userMessage.mutsumi = { ghostBlock };
+            history.push(userMessage);
+            const interaction = parsePersistedInteraction(cell.metadata?.mutsumi_interaction);
+            if (interaction) history.push(...interaction);
+            else if (cell.metadata?.mutsumi_interaction !== undefined) {
+                debugLogger.log(`[NotebookAdapter.getHistory]   - Ignored malformed interaction on cell ${i}`);
+            }
+            debugLogger.log(`[NotebookAdapter.getHistory]   - Added user message, interaction count=${interaction?.length ?? 0}`);
         }
 
         // Populate config from metadata if missing
@@ -200,7 +199,7 @@ export class NotebookAgentSession implements IAgentSession {
         ]);
     }
 
-    setHistory(messages: AgentMessage[]): void {
+    setHistory(messages: PersistedAgentMessage[]): void {
         this.fullHistory = messages;
     }
 
@@ -247,7 +246,7 @@ export class NotebookAgentSession implements IAgentSession {
         // Calculate the new interaction for this cell
         if (this.fullHistory && this.fullHistory.length > 0) {
 
-            const newMessages: AgentMessage[] = [];
+            const newMessages: PersistedAgentMessage[] = [];
             for (let i = this.fullHistory.length - 1; i >= 0; i--) {
                 const msg = this.fullHistory[i];
                 if (msg.role === 'user') {
@@ -258,6 +257,8 @@ export class NotebookAgentSession implements IAgentSession {
 
             if (newMessages.length > 0) {
                 newCellMetadata.mutsumi_interaction = newMessages;
+            } else {
+                delete newCellMetadata.mutsumi_interaction;
             }
         }
 
@@ -378,7 +379,9 @@ export class NotebookAgentSession implements IAgentSession {
 
         for (let i = 0; i < currentIndex; i++) {
             const cell = this.notebook.cellAt(i);
-            ghostBlocks.push(decodeGhostBlock(cell.metadata?.last_ghost_block));
+            if (cell.kind === vscode.NotebookCellKind.Code) {
+                ghostBlocks.push(decodeGhostBlock(cell.metadata?.last_ghost_block));
+            }
         }
 
         return ghostBlocks;

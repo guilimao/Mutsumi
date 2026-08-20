@@ -3,8 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { MutsumiSerializer } from '../notebook/serializer';
 import {
     messagesToGenericCells,
-    genericCellsToMessages,
-    extractGhostBlocksFromCells
+    extractGhostBlocksFromCells,
+    extractNotebookNotes,
 } from '../notebook/serializer';
 import {
     IAgentAdapter,
@@ -12,7 +12,7 @@ import {
     AgentSessionConfig,
     CreateSessionOptions
 } from './interfaces';
-import type { AgentMessage, AgentMetadata, AgentContext, ContextItem } from '../types';
+import type { AgentMetadata, ContextItem, PersistedAgentMessage } from '../types';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
 import { decodeAgentContext, encodeAgentContext } from '../mtmFormat';
@@ -102,9 +102,9 @@ export class HeadlessAgentSession implements IAgentSession {
     private readonly tokenSource = new vscode.CancellationTokenSource();
     private readonly resourceUri?: vscode.Uri;
     private config: AgentSessionConfig;
-    private history: AgentMessage[] = [];
+    private history: PersistedAgentMessage[] = [];
     private historyLoaded = false;
-    private fullHistory: AgentMessage[] | undefined;
+    private fullHistory: PersistedAgentMessage[] | undefined;
     private inputPrompt = '';
     private outputBuffer = '';
     private pendingGhostBlock?: GhostBlock | null;  // Ghost block for current message (applied on save)
@@ -127,7 +127,7 @@ export class HeadlessAgentSession implements IAgentSession {
         this.inputPrompt = prompt;
     }
 
-    async getHistory(): Promise<AgentMessage[]> {
+    async getHistory(): Promise<PersistedAgentMessage[]> {
         if (this.resourceUri && !this.historyLoaded) {
                 const content = await vscode.workspace.fs.readFile(this.resourceUri);
                 const data = decodeAgentContext(content);
@@ -157,7 +157,7 @@ export class HeadlessAgentSession implements IAgentSession {
         return [...this.history];
     }
 
-    setHistory(history: AgentMessage[]): void {
+    setHistory(history: PersistedAgentMessage[]): void {
         this.fullHistory = history;
         this.history = history;
         this.historyLoaded = true;
@@ -182,6 +182,12 @@ export class HeadlessAgentSession implements IAgentSession {
         const tokenSource = new vscode.CancellationTokenSource();
         const raw = await vscode.workspace.fs.readFile(this.resourceUri);
         const notebookData = await serializer.deserializeNotebook(raw, tokenSource.token);
+        const existingGenericCells = notebookData.cells.map(cell => ({
+            kind: cell.kind === vscode.NotebookCellKind.Code ? 2 as const : 1 as const,
+            value: cell.value,
+            metadata: cell.metadata,
+        }));
+        const notes = extractNotebookNotes(existingGenericCells);
 
         if (!notebookData.metadata) {
             notebookData.metadata = {
@@ -195,7 +201,7 @@ export class HeadlessAgentSession implements IAgentSession {
 
         // Use generic cell conversion for consistent behavior
         const sourceHistory = this.fullHistory || this.history;
-        const genericCells = messagesToGenericCells(sourceHistory);
+        const genericCells = messagesToGenericCells(sourceHistory, notes);
 
         // Apply the current ghost block to the last user cell if exists
         if (this.pendingGhostBlock !== undefined && genericCells.length > 0) {

@@ -165,7 +165,7 @@ export class AgentController {
                 });
 
                 // Persist the user turn, context metadata, and only fully formed native messages.
-                session.setHistory([...history.messages, ...runResult.messages]);
+                session.setHistory([...history.persistedMessages, ...runResult.messages]);
                 await session.save();
 
                 (session as any).end(runResult.status === 'completed');

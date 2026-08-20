@@ -106,6 +106,85 @@ export type AgentMessage =
     | AssistantMessage
     | ToolResultMessage;
 
+export type PersistedTextContent = {
+    type: 'text';
+    text: string;
+    textSignature?: unknown;
+};
+
+export type PersistedImageContent = {
+    type: 'image';
+    data: string;
+    mimeType: string;
+};
+
+export type PersistedThinkingContent = {
+    type: 'thinking';
+    thinking: string;
+    thinkingSignature?: unknown;
+    redacted?: unknown;
+};
+
+export type PersistedToolCall = {
+    type: 'toolCall';
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    thoughtSignature?: unknown;
+};
+
+/**
+ * On-disk messages keep the pi-ai semantic core strict while allowing provider
+ * envelope metadata to evolve independently of the .mtm format.
+ */
+export type PersistedUserMessage = {
+    role: 'user';
+    content: string | (PersistedTextContent | PersistedImageContent)[];
+    timestamp?: unknown;
+    mutsumi?: MutsumiUserMessageState;
+};
+
+export type PersistedAssistantMessage = {
+    role: 'assistant';
+    content: (PersistedTextContent | PersistedThinkingContent | PersistedToolCall)[];
+    api: string;
+    provider: string;
+    model: string;
+    usage?: unknown;
+    cost?: unknown;
+    timestamp?: unknown;
+    stopReason?: unknown;
+    responseId?: unknown;
+    responseModel?: unknown;
+    errorMessage?: unknown;
+    diagnostics?: unknown;
+};
+
+export type PersistedToolResultMessage = {
+    role: 'toolResult';
+    toolCallId: string;
+    toolName: string;
+    content: (PersistedTextContent | PersistedImageContent)[];
+    isError: boolean;
+    timestamp?: unknown;
+    usage?: unknown;
+    details?: unknown;
+    addedToolNames?: unknown;
+};
+
+export type PersistedAgentMessage =
+    | PersistedUserMessage
+    | PersistedAssistantMessage
+    | PersistedToolResultMessage;
+
+/** A user-authored Markup cell that is persisted but never sent to a model. */
+export interface NotebookNote {
+    /** Number of user cells that precede this note. */
+    beforeUserIndex: number;
+    /** Original Markdown source. */
+    markdown: string;
+}
+
 /** Current, deliberately strict on-disk .mtm format version. */
 export const MTM_FORMAT_VERSION = 1 as const;
 
@@ -119,7 +198,9 @@ export interface AgentContext {
     /** Agent metadata */
     metadata: AgentMetadata;
     /** Conversation message history */
-    context: AgentMessage[];
+    context: PersistedAgentMessage[];
+    /** User-authored Markup cells, anchored between user cells. */
+    notes?: NotebookNote[];
 }
 
 /**

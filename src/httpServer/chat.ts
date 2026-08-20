@@ -13,7 +13,7 @@ import {
 } from '../agent/types';
 import type { HeadlessAdapter } from '../adapters/headlessAdapter';
 import type { AgentSessionConfig } from '../adapters/interfaces';
-import type { AgentMessage, AgentMetadata, ModelSelection } from '../types';
+import type { AgentMetadata, ModelSelection } from '../types';
 import { buildInteractionHistory } from '../contextManagement/history';
 import { isMtmFormatError } from '../mtmFormat';
 
@@ -209,30 +209,12 @@ export async function handleChat(
     // Set the input prompt
     (session as any).setInput(prompt);
 
-    // Append user message to history
-    const userMessage: AgentMessage = { role: 'user', content: prompt, timestamp: Date.now() };
+    const baseHistory = await session.getHistory();
+    const runHistory = await buildInteractionHistory(session, prompt, baseHistory);
 
-    // Get existing history and append new user message
-    const history = await session.getHistory();
-    history.push(userMessage);
-
-    // Serialize updated history back to file (persist user message)
-    const userCell = new vscode.NotebookCellData(
-        vscode.NotebookCellKind.Code,
-        prompt,
-        'markdown'
-    );
-    userCell.metadata = { role: 'user', timestamp: userMessage.timestamp };
-    const notebookDataWithUser = new vscode.NotebookData([
-        ...notebookData.cells,
-        userCell
-    ]);
-    notebookData.metadata = updatedMetadata;
-    notebookDataWithUser.metadata = updatedMetadata;
-    const encoded = await serializer.serializeNotebook(notebookDataWithUser, tokenSource.token);
-    await vscode.workspace.fs.writeFile(fileUri, encoded);
-
-    const runHistory = await buildInteractionHistory(session);
+    // Persist the pending turn before the potentially long-running provider call.
+    session.setHistory(runHistory.persistedMessages);
+    await session.save();
 
     // Create AgentRunner options
     const runnerOptions = {
@@ -298,8 +280,8 @@ export async function handleChat(
             });
 
             // Persist the unanswered user turn and any fully completed native rounds.
-            const updatedHistory = [...runHistory.messages, ...runResult.messages];
-            (session as any).setHistory(updatedHistory);
+            const updatedHistory = [...runHistory.persistedMessages, ...runResult.messages];
+            session.setHistory(updatedHistory);
             await session.save();
 
             isFinished = true;
@@ -347,8 +329,8 @@ export async function handleChat(
                 });
 
                 // Persist only fully completed native messages, regardless of final run status.
-                const updatedHistory = [...runHistory.messages, ...runResult.messages];
-                (session as any).setHistory(updatedHistory);
+                const updatedHistory = [...runHistory.persistedMessages, ...runResult.messages];
+                session.setHistory(updatedHistory);
                 await session.save();
 
                 if (runResult.status === 'failed') {

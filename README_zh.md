@@ -285,6 +285,8 @@ Mutsumi 默认使用内置 `kimi-coding` 提供商的 `kimi-for-coding` 模型�
 
 Mutsumi 仅接受当前带版本标识的 `.mtm` 格式和当前提供商设置。旧文件请通过独立迁移项目转换，然后在 **Mutsumi: 管理模型提供商** 中重新录入凭据。
 
+VS Code 内置的 **+ Markdown** 按钮会添加仅供用户查看的注释。Markdown 源文本及其位置会保存到 `.mtm` 文件，但不会发送给模型，也不会进入会话压缩或标题生成。
+
 > **注意：** 本 Agent 框架针对 Kimi 基模家族调性优化设计，强烈建议使用 `kimi-for-coding`。
 
 ### 创建第一个 Agent

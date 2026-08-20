@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as express from 'express';
 import { getAgentFromRegistry } from './utils';
 import { AgentOrchestrator } from '../agent/agentOrchestrator';
-import type { AgentMessage } from '../types';
+import type { PersistedAgentMessage } from '../types';
 import { decodeAgentContext, isMtmFormatError } from '../mtmFormat';
 
 /**
@@ -25,7 +25,7 @@ export async function handleGetAgent(req: express.Request, res: express.Response
 
     // Load full history from file
     const fileUri = vscode.Uri.parse(agent.fileUri);
-    let history: AgentMessage[] = [];
+    let history: PersistedAgentMessage[] = [];
     if (fileUri) {
         try {
             const content = await vscode.workspace.fs.readFile(fileUri);

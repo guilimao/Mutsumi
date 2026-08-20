@@ -5,12 +5,12 @@
 
 import * as vscode from 'vscode';
 import { IAgentSession } from '../../adapters/interfaces';
-import { AgentMessage, AgentMetadata, MTM_FORMAT_VERSION } from '../../types';
+import { AgentMessage, AgentMetadata, PersistedAgentMessage } from '../../types';
 import { LiteAdapter, LiteAgentSessionConfig } from '../../adapters/liteAdapter';
 import { GhostBlock, GhostFileEntry } from '../../contextManagement/interfaces';
 import { decodeGhostBlock, removeGhostFiles } from '../../contextManagement/ghostBlocks';
 import { messageText } from '../../llm/messageText';
-import { t } from '../../i18n';
+import { parsePersistedInteraction } from '../../mtmFormat';
 
 /**
  * Builds NotebookEdits that strip ghost file entries from every cell's last_ghost_block.
@@ -30,6 +30,7 @@ export function buildGhostStripEdits(
     const edits: vscode.NotebookEdit[] = [];
     for (let i = 0; i < notebook.cellCount; i++) {
         const cell = notebook.cellAt(i);
+        if (cell.kind !== vscode.NotebookCellKind.Code) continue;
         const raw = cell.metadata?.last_ghost_block;
         if (raw === undefined || raw === null) {
             continue;
@@ -98,30 +99,24 @@ export async function createDebugSessionFromNotebook(
     const cell = notebook.cellAt(cellIndex);
 
     // Build raw history from cells before current
-    const history: AgentMessage[] = [];
+    const history: PersistedAgentMessage[] = [];
     for (let i = 0; i < cellIndex; i++) {
         const c = notebook.cellAt(i);
-        const role = c.metadata?.role ?? (c.kind === vscode.NotebookCellKind.Code ? 'user' : 'assistant');
+        if (c.kind !== vscode.NotebookCellKind.Code) continue;
         const content = c.document.getText();
 
-        if (content.trim()) {
-            if (role === 'user') {
-                history.push({ role: 'user', content, timestamp: Number(c.metadata?.timestamp) || 0 });
-                // Expand mutsumi_interaction from user cell (contains assistant/tool messages)
-                const interaction = c.metadata?.mutsumi_interaction as AgentMessage[] | undefined;
-                if (interaction && Array.isArray(interaction)) {
-                    history.push(...interaction);
-                }
-            } else if (role === 'assistant') {
-                throw new Error(t('serializer.standaloneAssistantCellUnsupported', MTM_FORMAT_VERSION));
-            }
-        }
+        history.push({ role: 'user', content, timestamp: c.metadata?.timestamp });
+        const interaction = parsePersistedInteraction(c.metadata?.mutsumi_interaction);
+        if (interaction) history.push(...interaction);
     }
 
     // Collect ghost blocks from previous cells
     const ghostBlocks: (GhostBlock | null)[] = [];
     for (let i = 0; i < cellIndex; i++) {
-        ghostBlocks.push(decodeGhostBlock(notebook.cellAt(i).metadata?.last_ghost_block));
+        const previousCell = notebook.cellAt(i);
+        if (previousCell.kind === vscode.NotebookCellKind.Code) {
+            ghostBlocks.push(decodeGhostBlock(previousCell.metadata?.last_ghost_block));
+        }
     }
 
     const adapter = new LiteAdapter();

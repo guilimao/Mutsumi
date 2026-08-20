@@ -19,9 +19,10 @@ vi.mock('vscode', () => ({
 
 import { toPiContext } from '../src/llm/context';
 import { decodeAgentContext, encodeAgentContext, INVALID_MTM_FILE, UNSUPPORTED_MTM_FORMAT } from '../src/mtmFormat';
-import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage } from '../src/types';
-import { genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
+import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage, type PersistedAgentMessage } from '../src/types';
+import { extractNotebookNotes, genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
 import { parseUserMessageWithImages } from '../src/contextManagement/utils';
+import { hydrateProviderMessage, mergeConsecutiveUserMessages } from '../src/contextManagement/history';
 
 const assistant: AssistantMessage = {
     role: 'assistant',
@@ -42,7 +43,7 @@ const assistant: AssistantMessage = {
     ],
 };
 
-function context(messages: AgentMessage[]): AgentContext {
+function context(messages: PersistedAgentMessage[]): AgentContext {
     return {
         formatVersion: MTM_FORMAT_VERSION,
         metadata: {
@@ -85,8 +86,8 @@ describe(`.mtm format version ${MTM_FORMAT_VERSION}`, () => {
         expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify(old))))
             .toThrow(expect.objectContaining({ code: INVALID_MTM_FILE }));
 
-        const malformed = context([{ role: 'user', content: 'go', timestamp: 1 }, { ...assistant, usage: undefined } as any]);
-        expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify(malformed))))
+        const missingCore = context([{ role: 'user', content: 'go', timestamp: 1 }, { ...assistant, model: undefined } as any]);
+        expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify(missingCore))))
             .toThrow(expect.objectContaining({ code: INVALID_MTM_FILE }));
         const incompleteToolTurn = context([{ role: 'user', content: 'go', timestamp: 1 }, assistant]);
         expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify(incompleteToolTurn))))
@@ -96,6 +97,105 @@ describe(`.mtm format version ${MTM_FORMAT_VERSION}`, () => {
         removedProvider.metadata.provider = 'kimi-for-coding';
         expect(() => decodeAgentContext(new TextEncoder().encode(JSON.stringify(removedProvider))))
             .toThrow('removed provider ID');
+    });
+
+    it('round-trips Markup notes at every user-relative anchor without adding messages', () => {
+        const source = context([
+            { role: 'user', content: 'one', timestamp: 1 },
+            { role: 'user', content: [{ type: 'text', text: 'two' }, { type: 'image', mimeType: 'image/png', data: 'AQID' }], timestamp: 2 },
+        ]);
+        source.notes = [
+            { beforeUserIndex: 0, markdown: '# before' },
+            { beforeUserIndex: 1, markdown: '' },
+            { beforeUserIndex: 1, markdown: 'second in gap' },
+            { beforeUserIndex: 2, markdown: 'after' },
+        ];
+
+        const decoded = decodeAgentContext(encodeAgentContext(source));
+        expect(decoded).toEqual(source);
+        const cells = messagesToGenericCells(decoded.context, decoded.notes);
+        expect(cells.map(cell => [cell.kind, cell.value])).toEqual([
+            [1, '# before'], [2, 'one'], [1, ''], [1, 'second in gap'],
+            [2, 'two![image](data:image/png;base64,AQID)'], [1, 'after'],
+        ]);
+        expect(genericCellsToMessages(cells)).toEqual(source.context);
+        expect(extractNotebookNotes(cells)).toEqual(source.notes);
+    });
+
+    it('allows consecutive pending users but still rejects a user inside an open tool turn', () => {
+        const pending = context([
+            { role: 'user', content: 'first', timestamp: 1 },
+            { role: 'user', content: 'second', timestamp: 2 },
+        ]);
+        expect(decodeAgentContext(encodeAgentContext(pending))).toEqual(pending);
+        expect(messagesToGenericCells(pending.context)).toHaveLength(2);
+
+        const dangling = context([
+            { role: 'user', content: 'first', timestamp: 1 },
+            assistant,
+            { role: 'user', content: 'not allowed yet', timestamp: 3 },
+        ]);
+        expect(() => encodeAgentContext(dangling)).toThrow('unexpected user message');
+    });
+
+    it('keeps a notebook user pending when its interaction metadata is malformed', () => {
+        const cells = [{
+            kind: 2 as const,
+            value: 'retry me',
+            metadata: {
+                role: 'user' as const,
+                timestamp: 7,
+                mutsumi_interaction: [{ role: 'assistant', content: [], api: 'x' }] as any,
+            },
+        }];
+        expect(genericCellsToMessages(cells)).toEqual([
+            { role: 'user', content: 'retry me', timestamp: 7 },
+        ]);
+    });
+
+    it('preserves arbitrary non-core provider fields and hydrates only a temporary provider copy', () => {
+        const rawAssistant = {
+            role: 'assistant' as const,
+            api: 'anthropic-messages', provider: 'anthropic', model: 'claude-test',
+            content: [{ type: 'text' as const, text: 'hello', textSignature: { provider: 'changed' } }],
+            usage: { providerSpecific: true }, timestamp: 'yesterday', stopReason: { native: true },
+            responseId: { nested: true }, diagnostics: 'opaque',
+            nativeFutureField: { any: ['JSON', 1] },
+        };
+        const source = context([{ role: 'user', content: 'go' }, rawAssistant]);
+        const decoded = decodeAgentContext(encodeAgentContext(source));
+        expect(decoded).toEqual(source);
+
+        const hydrated = hydrateProviderMessage(decoded.context[1]);
+        expect(hydrated).toMatchObject({ timestamp: 0, stopReason: 'stop' });
+        expect((hydrated as any).usage).toEqual({
+            input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        });
+        expect(decoded.context[1]).toEqual(rawAssistant);
+    });
+
+    it('merges only adjacent provider-facing users and preserves multimodal order', () => {
+        const mergedText = mergeConsecutiveUserMessages([
+            { role: 'user', content: 'one', timestamp: 1 },
+            { role: 'user', content: 'two', timestamp: 2 },
+        ]);
+        expect(mergedText).toEqual([{ role: 'user', content: 'one\n\ntwo', timestamp: 2 }]);
+
+        const mergedMulti = mergeConsecutiveUserMessages([
+            { role: 'user', content: [{ type: 'image', mimeType: 'image/png', data: 'A' }], timestamp: 1 },
+            { role: 'user', content: 'caption', timestamp: 2 },
+            assistant,
+            { role: 'user', content: 'next round', timestamp: 3 },
+        ]);
+        expect(mergedMulti[0]).toEqual({
+            role: 'user', timestamp: 2, content: [
+                { type: 'image', mimeType: 'image/png', data: 'A' },
+                { type: 'text', text: '\n\n' },
+                { type: 'text', text: 'caption' },
+            ],
+        });
+        expect(mergedMulti).toHaveLength(3);
     });
 
     it('passes native messages directly to pi-ai while stripping Mutsumi-only user state', async () => {

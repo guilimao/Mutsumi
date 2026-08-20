@@ -1,20 +1,16 @@
 import type {
-    AssistantMessage,
     ImageContent,
-    Message,
     TextContent,
     ThinkingContent,
     ToolCall,
-    ToolResultMessage,
-    Usage,
-    UserMessage,
 } from '@earendil-works/pi-ai';
 import { decodeGhostBlock } from './contextManagement/ghostBlocks';
 import {
     AgentContext,
-    AgentMessage,
     AgentMetadata,
     MTM_FORMAT_VERSION,
+    NotebookNote,
+    PersistedAgentMessage,
 } from './types';
 
 export const UNSUPPORTED_MTM_FORMAT = 'UNSUPPORTED_MTM_FORMAT';
@@ -35,15 +31,10 @@ function record(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function finiteNumber(value: unknown): value is number {
-    return typeof value === 'number' && Number.isFinite(value);
-}
-
 function textContent(value: unknown): value is TextContent {
     return record(value)
         && value.type === 'text'
-        && typeof value.text === 'string'
-        && (value.textSignature === undefined || typeof value.textSignature === 'string');
+        && typeof value.text === 'string';
 }
 
 function imageContent(value: unknown): value is ImageContent {
@@ -56,9 +47,7 @@ function imageContent(value: unknown): value is ImageContent {
 function thinkingContent(value: unknown): value is ThinkingContent {
     return record(value)
         && value.type === 'thinking'
-        && typeof value.thinking === 'string'
-        && (value.thinkingSignature === undefined || typeof value.thinkingSignature === 'string')
-        && (value.redacted === undefined || typeof value.redacted === 'boolean');
+        && typeof value.thinking === 'string';
 }
 
 function toolCall(value: unknown): value is ToolCall {
@@ -66,29 +55,19 @@ function toolCall(value: unknown): value is ToolCall {
         && value.type === 'toolCall'
         && typeof value.id === 'string'
         && typeof value.name === 'string'
-        && record(value.arguments)
-        && (value.thoughtSignature === undefined || typeof value.thoughtSignature === 'string');
-}
-
-function usage(value: unknown): value is Usage {
-    if (!record(value) || !record(value.cost)) return false;
-    const cost = value.cost;
-    return ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'].every(key => finiteNumber(value[key]))
-        && (value.cacheWrite1h === undefined || finiteNumber(value.cacheWrite1h))
-        && (value.reasoning === undefined || finiteNumber(value.reasoning))
-        && ['input', 'output', 'cacheRead', 'cacheWrite', 'total'].every(key => finiteNumber(cost[key]));
+        && record(value.arguments);
 }
 
 function stringArray(value: unknown): value is string[] {
     return Array.isArray(value) && value.every(item => typeof item === 'string');
 }
 
-function userMessage(value: unknown): value is UserMessage & AgentMessage {
+function userMessage(value: unknown): value is PersistedAgentMessage & { role: 'user' } {
     if (!record(value)) return false;
     const content = value.content;
     const validContent = typeof content === 'string'
         || (Array.isArray(content) && content.every(part => textContent(part) || imageContent(part)));
-    if (!validContent || !finiteNumber(value.timestamp)) return false;
+    if (!validContent) return false;
     if (value.mutsumi !== undefined) {
         if (!record(value.mutsumi)) return false;
         if (value.mutsumi.ghostBlock !== undefined && !decodeGhostBlock(value.mutsumi.ghostBlock)) return false;
@@ -96,52 +75,39 @@ function userMessage(value: unknown): value is UserMessage & AgentMessage {
     return true;
 }
 
-function assistantMessage(value: unknown): value is AssistantMessage {
+function assistantMessage(value: unknown): value is PersistedAgentMessage & { role: 'assistant' } {
     if (!record(value)) return false;
-    const stopReasons = new Set(['stop', 'length', 'toolUse', 'error', 'aborted']);
     return Array.isArray(value.content)
         && value.content.every(block => textContent(block) || thinkingContent(block) || toolCall(block))
         && typeof value.api === 'string'
         && typeof value.provider === 'string'
         && typeof value.model === 'string'
-        && (value.responseModel === undefined || typeof value.responseModel === 'string')
-        && (value.responseId === undefined || typeof value.responseId === 'string')
-        && usage(value.usage)
-        && stopReasons.has(value.stopReason as string)
-        && (value.errorMessage === undefined || typeof value.errorMessage === 'string')
-        && finiteNumber(value.timestamp)
         && value.mutsumi === undefined;
 }
 
-function toolResultMessage(value: unknown): value is ToolResultMessage {
+function toolResultMessage(value: unknown): value is PersistedAgentMessage & { role: 'toolResult' } {
     if (!record(value)) return false;
     return typeof value.toolCallId === 'string'
         && typeof value.toolName === 'string'
         && Array.isArray(value.content)
         && value.content.every(part => textContent(part) || imageContent(part))
-        && (value.usage === undefined || usage(value.usage))
-        && (value.addedToolNames === undefined || stringArray(value.addedToolNames))
         && typeof value.isError === 'boolean'
-        && finiteNumber(value.timestamp)
         && value.mutsumi === undefined;
 }
 
-function parseMessages(value: unknown): AgentMessage[] {
+function parseMessages(value: unknown): PersistedAgentMessage[] {
     if (!Array.isArray(value)) throw invalid('context must be an array');
-    const messages: AgentMessage[] = [];
+    const messages: PersistedAgentMessage[] = [];
     let sawUser = false;
-    let lastRole: AgentMessage['role'] | undefined;
+    let lastRole: PersistedAgentMessage['role'] | undefined;
     const availableToolCalls = new Map<string, string>();
 
     for (let index = 0; index < value.length; index++) {
         const raw = value[index];
         if (!record(raw) || typeof raw.role !== 'string') throw invalid(`context[${index}] is not a message`);
-        for (const forbidden of ['tool_calls', 'tool_call_id', 'reasoning_content', 'piAiReplay', 'metadata']) {
-            if (forbidden in raw) throw invalid(`context[${index}] contains removed field "${forbidden}"`);
-        }
-        let message: Message;
+        let message: PersistedAgentMessage;
         if (raw.role === 'user' && userMessage(raw)) {
-            if (lastRole === 'user' || availableToolCalls.size > 0) {
+            if (availableToolCalls.size > 0) {
                 throw invalid(`context[${index}] has an unexpected user message`);
             }
             sawUser = true;
@@ -172,11 +138,44 @@ function parseMessages(value: unknown): AgentMessage[] {
         } else {
             throw invalid(`context[${index}] is not a valid pi-ai message or violates turn ordering`);
         }
-        messages.push(message as AgentMessage);
+        messages.push(message);
         lastRole = message.role;
     }
     if (availableToolCalls.size > 0) throw invalid('context ends before all tool calls have results');
     return messages;
+}
+
+/**
+ * Validate a notebook cell's interaction metadata without letting malformed UI
+ * state abort the whole run. An interaction may contain assistant/toolResult
+ * messages only and must form complete tool rounds.
+ */
+export function parsePersistedInteraction(value: unknown): PersistedAgentMessage[] | undefined {
+    if (!Array.isArray(value) || value.some(item => record(item) && item.role === 'user')) return undefined;
+    try {
+        const parsed = parseMessages([{ role: 'user', content: '', timestamp: 0 }, ...value]);
+        return parsed.slice(1);
+    } catch {
+        return undefined;
+    }
+}
+
+function parseNotes(value: unknown, userCount: number): NotebookNote[] | undefined {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value)) throw invalid('notes must be an array');
+    const notes: NotebookNote[] = [];
+    for (let index = 0; index < value.length; index++) {
+        const item = value[index];
+        if (!record(item)
+            || !Number.isInteger(item.beforeUserIndex)
+            || (item.beforeUserIndex as number) < 0
+            || (item.beforeUserIndex as number) > userCount
+            || typeof item.markdown !== 'string') {
+            throw invalid(`notes[${index}] is not a valid notebook note`);
+        }
+        notes.push({ beforeUserIndex: item.beforeUserIndex as number, markdown: item.markdown });
+    }
+    return notes.length > 0 ? notes : undefined;
 }
 
 function invalid(detail: string): MtmFormatError {
@@ -211,7 +210,8 @@ export function parseAgentContext(value: unknown): AgentContext {
             throw invalid('assistant message uses the removed provider ID "kimi-for-coding"');
         }
     }
-    return { formatVersion: MTM_FORMAT_VERSION, metadata, context };
+    const notes = parseNotes(value.notes, context.filter(message => message.role === 'user').length);
+    return { formatVersion: MTM_FORMAT_VERSION, metadata, context, ...(notes ? { notes } : {}) };
 }
 
 export function decodeAgentContext(content: Uint8Array): AgentContext {

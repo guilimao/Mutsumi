@@ -1,6 +1,13 @@
 import * as vscode from 'vscode';
 import { TextDecoder, TextEncoder } from 'util';
-import { AgentContext, AgentMessage, AgentMetadata, MTM_FORMAT_VERSION } from '../types';
+import {
+    AgentContext,
+    AgentMessage,
+    AgentMetadata,
+    MTM_FORMAT_VERSION,
+    NotebookNote,
+    PersistedAgentMessage,
+} from '../types';
 import { AgentOrchestrator } from '../agent/agentOrchestrator';
 import { ToolManager } from '../tools.d/toolManager';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,7 +18,13 @@ import { GhostBlock } from '../contextManagement/interfaces';
 import { decodeGhostBlock } from '../contextManagement/ghostBlocks';
 import { t } from '../i18n';
 import type { McpToolSelection } from '../mcp/interfaces';
-import { decodeAgentContext, encodeAgentContext, isMtmFormatError, UNSUPPORTED_MTM_FORMAT } from '../mtmFormat';
+import {
+    decodeAgentContext,
+    encodeAgentContext,
+    isMtmFormatError,
+    parsePersistedInteraction,
+    UNSUPPORTED_MTM_FORMAT,
+} from '../mtmFormat';
 
 // ============================================================================
 // Core Data Structures (VSCode-agnostic)
@@ -22,48 +35,53 @@ import { decodeAgentContext, encodeAgentContext, isMtmFormatError, UNSUPPORTED_M
  * Used by both NotebookSerializer and HeadlessAdapter.
  */
 export interface GenericCellData {
-    /** Cell kind: 1 = Markup (assistant), 2 = Code (user) */
+    /** Cell kind: 1 = Markup note, 2 = Code user turn */
     kind: 1 | 2;
     /** Cell content value */
     value: string;
     /** Cell metadata including role, ghost blocks, interaction */
     metadata?: {
-        role?: 'user' | 'assistant';
-        timestamp?: number;
+        role?: 'user' | 'note';
+        timestamp?: unknown;
         /** Raw persisted ghost block metadata; decoded at adapter/serializer boundaries */
         last_ghost_block?: unknown;
-        mutsumi_interaction?: AgentMessage[];
+        mutsumi_interaction?: PersistedAgentMessage[];
         [key: string]: any;
     };
 }
 
 /**
- * Result of converting AgentMessage array to cells.
+ * Result of converting persisted messages to cells.
  */
 export interface MessageToCellsResult {
     cells: GenericCellData[];
 }
 
 /**
- * Convert AgentMessage array to generic cells (message grouping logic).
+ * Convert persisted messages and notes to generic cells (message grouping logic).
  * This is the core algorithm shared between Notebook and Headless adapters.
  * 
  * Rules:
  * - User messages become Code cells (kind: 2)
- * - Assistant messages become Markup cells (kind: 1)
+ * - Markup cells are user-only notes restored from the top-level notes array
  * - Consecutive assistant + toolResult messages are grouped into one cell's mutsumi_interaction
  * 
- * IMPORTANT: mutsumi_interaction ONLY exists on user cells, never on assistant cells.
+ * IMPORTANT: mutsumi_interaction ONLY exists on user cells, never on note cells.
  * Assistant/tool messages following a user message are stored in that user cell's
  * mutsumi_interaction array for rendering as output.
  */
-export function messagesToGenericCells(messages: AgentMessage[]): GenericCellData[] {
+export function messagesToGenericCells(
+    messages: PersistedAgentMessage[],
+    notes: NotebookNote[] = [],
+): GenericCellData[] {
     debugLogger.log(`[messagesToGenericCells] ==== START, input message count: ${messages?.length ?? 0} ====`);
     const cells: GenericCellData[] = [];
 
     if (!messages || messages.length === 0) {
-        debugLogger.log('[messagesToGenericCells] Empty messages array, returning empty cells');
-        return cells;
+        debugLogger.log('[messagesToGenericCells] Empty messages array, returning note cells only');
+        return notes
+            .filter(note => note.beforeUserIndex === 0)
+            .map(note => ({ kind: 1, value: note.markdown, metadata: { role: 'note' } }));
     }
 
     for (let i = 0; i < messages.length; i++) {
@@ -87,7 +105,7 @@ export function messagesToGenericCells(messages: AgentMessage[]): GenericCellDat
 
             // Look ahead for associated assistant/tool messages
             // These will be stored in mutsumi_interaction and rendered as this cell's output
-            const group: AgentMessage[] = [];
+            const group: PersistedAgentMessage[] = [];
             let j = i + 1;
             while (j < messages.length) {
                 const next = messages[j];
@@ -112,19 +130,29 @@ export function messagesToGenericCells(messages: AgentMessage[]): GenericCellDat
         }
     }
 
-    debugLogger.log(`[messagesToGenericCells] ==== END, generated ${cells.length} cells ====`);
-    return cells;
+    const interleaved: GenericCellData[] = [];
+    for (let beforeUserIndex = 0; beforeUserIndex <= cells.length; beforeUserIndex++) {
+        for (const note of notes) {
+            if (note.beforeUserIndex === beforeUserIndex) {
+                interleaved.push({ kind: 1, value: note.markdown, metadata: { role: 'note' } });
+            }
+        }
+        if (beforeUserIndex < cells.length) interleaved.push(cells[beforeUserIndex]);
+    }
+
+    debugLogger.log(`[messagesToGenericCells] ==== END, generated ${interleaved.length} cells ====`);
+    return interleaved;
 }
 
 /**
- * Convert generic cells back to AgentMessage array.
+ * Convert generic cells back to persisted messages.
  * Used for serialization to file.
  * 
- * NOTE: mutsumi_interaction is ONLY expanded from user cells, never from assistant cells.
+ * NOTE: mutsumi_interaction is ONLY expanded from user cells; Markup notes are skipped.
  */
-export function genericCellsToMessages(cells: GenericCellData[]): AgentMessage[] {
+export function genericCellsToMessages(cells: GenericCellData[]): PersistedAgentMessage[] {
     debugLogger.log(`[genericCellsToMessages] ==== START, input ${cells?.length ?? 0} cells ====`);
-    const messages: AgentMessage[] = [];
+    const messages: PersistedAgentMessage[] = [];
 
     if (!cells || cells.length === 0) {
         debugLogger.log('[genericCellsToMessages] Empty cells array, returning empty messages');
@@ -133,17 +161,21 @@ export function genericCellsToMessages(cells: GenericCellData[]): AgentMessage[]
 
     for (let idx = 0; idx < cells.length; idx++) {
         const cell = cells[idx];
-        const role = cell.metadata?.role ?? (cell.kind === 2 ? 'user' : 'assistant');
+        if (cell.kind === 1) {
+            debugLogger.log(`[genericCellsToMessages] Cell ${idx}: skipped Markup note`);
+            continue;
+        }
+        const role = 'user';
         debugLogger.log(`[genericCellsToMessages] Cell ${idx}: kind=${cell.kind}, role=${role}, value length=${cell.value?.length ?? 0}`);
 
         if (role === 'user') {
             // Strip ghost block from persisted content
             const cleanContent = stripGhostBlockFromCell(cell.value);
 
-            const userMsg: AgentMessage = {
+            const userMsg: PersistedAgentMessage = {
                 role: 'user',
                 content: parseSerializedUserContent(cleanContent),
-                timestamp: Number(cell.metadata?.timestamp) || 0,
+                timestamp: cell.metadata?.timestamp,
             };
 
             const ghostBlock = decodeGhostBlock(cell.metadata?.last_ghost_block);
@@ -156,16 +188,30 @@ export function genericCellsToMessages(cells: GenericCellData[]): AgentMessage[]
 
             // Expand interaction if exists (ONLY for user cells)
             if (cell.metadata?.mutsumi_interaction) {
-                messages.push(...cell.metadata.mutsumi_interaction);
-                debugLogger.log(`[genericCellsToMessages]   - Expanded interaction: ${cell.metadata.mutsumi_interaction.length} messages`);
+                const interaction = parsePersistedInteraction(cell.metadata.mutsumi_interaction);
+                if (interaction) {
+                    messages.push(...interaction);
+                    debugLogger.log(`[genericCellsToMessages]   - Expanded interaction: ${interaction.length} messages`);
+                } else {
+                    debugLogger.log(`[genericCellsToMessages]   - Ignored malformed interaction on cell ${idx}`);
+                }
             }
-        } else {
-            throw new Error(t('serializer.standaloneAssistantSerializationUnsupported', MTM_FORMAT_VERSION));
         }
     }
 
     debugLogger.log(`[genericCellsToMessages] ==== END, generated ${messages.length} messages ====`);
     return messages;
+}
+
+/** Extract Markup notes, anchored by the number of preceding Code/user cells. */
+export function extractNotebookNotes(cells: GenericCellData[]): NotebookNote[] {
+    const notes: NotebookNote[] = [];
+    let userCount = 0;
+    for (const cell of cells) {
+        if (cell.kind === 2) userCount++;
+        else notes.push({ beforeUserIndex: userCount, markdown: cell.value });
+    }
+    return notes;
 }
 
 /**
@@ -191,9 +237,9 @@ export function extractGhostBlocksFromCells(cells: GenericCellData[]): (GhostBlo
  * Build RenderBlocks from an interaction message group.
  * Pure function shared by deserializeNotebook output generation.
  */
-function buildInteractionRenderBlocks(group: AgentMessage[], isSubAgent: boolean): RenderBlock[] {
+function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent: boolean): RenderBlock[] {
     const blocks: RenderBlock[] = [];
-    const toolResults = new Map<string, Extract<AgentMessage, { role: 'toolResult' }>>();
+    const toolResults = new Map<string, Extract<PersistedAgentMessage, { role: 'toolResult' }>>();
     for (const message of group) {
         if (message.role === 'toolResult') toolResults.set(message.toolCallId, message);
     }
@@ -317,7 +363,7 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
 
         // Use generic cell conversion
         debugLogger.log(`[deserializeNotebook] Converting ${raw.context?.length ?? 0} messages to generic cells...`);
-        const genericCells = messagesToGenericCells(raw.context);
+        const genericCells = messagesToGenericCells(raw.context, raw.notes);
         debugLogger.log(`[deserializeNotebook] Generated ${genericCells.length} generic cells`);
         genericCells.forEach((cell, idx) => {
             debugLogger.log(`[deserializeNotebook] GenericCell ${idx}: kind=${cell.kind}, role=${cell.metadata?.role}, value length=${cell.value?.length ?? 0}, has interaction=${!!cell.metadata?.mutsumi_interaction}`);
@@ -453,6 +499,7 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
         // Use generic conversion
         debugLogger.log(`[serializeNotebook] Converting ${genericCells.length} generic cells to messages...`);
         const context = genericCellsToMessages(genericCells);
+        const notes = extractNotebookNotes(genericCells);
         debugLogger.log(`[serializeNotebook] Generated ${context.length} messages`);
         context.forEach((msg, idx) => {
             debugLogger.log(`[serializeNotebook] Message ${idx}: role=${msg.role}, content length=${typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length}`);
@@ -473,7 +520,8 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
         const output: AgentContext = {
             formatVersion: MTM_FORMAT_VERSION,
             metadata,
-            context
+            context,
+            ...(notes.length > 0 ? { notes } : {}),
         };
 
         const encoded = encodeAgentContext(output);

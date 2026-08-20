@@ -14,6 +14,8 @@ import { getTitleModelSelection, resolveModelSelection } from '../utils';
 import type { AgentRunOptions } from './types';
 import type { AgentRunContext } from './types';
 import { assistantText, messageText } from '../llm/messageText';
+import { parsePersistedInteraction } from '../mtmFormat';
+import { hydrateProviderMessage } from '../contextManagement/history';
 
 /**
  * Creates a deep clone of an object.
@@ -167,9 +169,8 @@ export function extractMessagesFromNotebook(notebook: vscode.NotebookDocument): 
     for (const cell of notebook.getCells()) {
         if (cell.kind === vscode.NotebookCellKind.Code) {
             messages.push({ role: 'user', content: cell.document.getText(), timestamp: Number(cell.metadata?.timestamp) || 0 });
-            if (cell.metadata?.mutsumi_interaction) {
-                messages.push(...(cell.metadata.mutsumi_interaction as AgentMessage[]));
-            }
+            const interaction = parsePersistedInteraction(cell.metadata?.mutsumi_interaction);
+            if (interaction) messages.push(...interaction.map(hydrateProviderMessage));
         }
     }
     return messages;
