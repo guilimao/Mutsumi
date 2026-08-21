@@ -11,6 +11,7 @@ import type { UIRenderer } from "./uiRenderer";
 import type { RenderBlock } from "../notebook/renderTypes";
 import type { IAgentSession } from "../adapters/interfaces";
 import { getCachedResult, setCachedResult } from "../tools.d/cache";
+import type { ToolCall } from '@earendil-works/pi-ai';
 
 /** Race a thenable against an abort signal; rejects when the signal fires. */
 function raceAbort<T>(signal: AbortSignal, p: Thenable<T>): Promise<T> {
@@ -101,7 +102,7 @@ export class ToolExecutor {
 	 * });
 	 */
 	async executeTools(
-		toolCalls: any[],
+		toolCalls: ToolCall[],
 		abortSignal: AbortSignal,
 		callbacks: ToolExecutorCallbacks,
 	): Promise<ToolExecutionResult> {
@@ -114,21 +115,8 @@ export class ToolExecutor {
 				break;
 			}
 
-			const toolName = tc.function.name;
-			const toolArgsStr = tc.function.arguments;
-			let toolArgs: any;
-			try {
-				toolArgs = JSON.parse(toolArgsStr);
-			} catch (err: any) {
-				toolMessages.push({
-					role: "tool",
-					tool_call_id: tc.id,
-					name: toolName,
-					content: `Error: invalid tool arguments JSON: ${err.message}`,
-					metadata: { isError: true },
-				});
-				continue;
-			}
+			const toolName = tc.name;
+			const toolArgs = tc.arguments;
 
 			const toolSession = new ToolSession(this.session.id, toolName);
 			const onAgentAbort = () => toolSession.abort();
@@ -206,11 +194,12 @@ export class ToolExecutor {
 			);
 
 			toolMessages.push({
-				role: "tool",
-				tool_call_id: tc.id,
-				name: toolName,
-				content: toolResult,
-				metadata: { isError },
+				role: "toolResult",
+				toolCallId: tc.id,
+				toolName,
+				content: [{ type: 'text', text: toolResult }],
+				isError,
+				timestamp: Date.now(),
 			});
 		}
 		return { messages: toolMessages, shouldTerminate, isTaskComplete };

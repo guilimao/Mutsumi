@@ -1,5 +1,12 @@
 import * as vscode from 'vscode';
-import * as pp from 'preprocess';
+const pp = require('preprocess') as {
+    preprocess(source: string, context?: Record<string, any>, options?: {
+        fileNotFoundSilentFail?: boolean;
+        srcDir?: string;
+        srcEol?: string;
+        type?: string;
+    }): string;
+};
 import {
     extractBracketContent,
     parseReference,

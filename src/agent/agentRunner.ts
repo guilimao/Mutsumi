@@ -9,14 +9,15 @@ import { AgentMessage } from '../types';
 import { UIRenderer } from './uiRenderer';
 import { MUTSUMI_AGENT_CHAT_MIME, RenderBlock } from '../notebook/renderTypes';
 import { LLMStreamHandler } from './llmStream';
-import { ToolExecutor } from './toolExecutor';
+import { ToolExecutor, type ToolExecutionResult } from './toolExecutor';
 import { TitleGenerator } from './titleGenerator';
 import { LLMClient } from './llmClient';
 import { IAgentSession, AgentSessionConfig } from '../adapters/interfaces';
 import { LiteAgentSession } from '../adapters/liteAdapter';
 import { debugLogger } from '../debugLogger';
 import { getTitleModelSelection } from '../utils';
-import { AgentRunOptions } from './types';
+import { AgentRunContext, AgentRunOptions, AgentRunResult } from './types';
+import type { ToolCall } from '@earendil-works/pi-ai';
 import { t } from '../i18n';
 
 export { AgentRunOptions } from './types';
@@ -28,7 +29,7 @@ export { AgentRunOptions } from './types';
  * @class AgentRunner
  * @example
  * const runner = new AgentRunner(options, toolSet, session);
- * const newMessages = await runner.run(abortController, initialMessages);
+ * const result = await runner.run(abortController, initialContext);
  */
 export class AgentRunner {
     /** Maximum number of tool interaction loops */
@@ -79,16 +80,15 @@ export class AgentRunner {
      * @description Runs the conversation loop with the LLM, handling streaming,
      * tool calls, and termination conditions.
      * @param {AbortController} abortController - Controller for cancellation
-     * @param {AgentMessage[]} initialMessages - Initial message history
-     * @returns {Promise<AgentMessage[]>} New messages generated during this run
-     * @throws {TerminationError} If task_finish tool is called
+     * @param {AgentRunContext} initialContext - Provider-ready prompt and message history
+     * @returns {Promise<AgentRunResult>} Explicit status plus native messages safe to persist
      * @example
-     * const newMessages = await runner.run(abortController, messages);
+     * const result = await runner.run(abortController, context);
      */
     async run(
         abortController: AbortController,
-        initialMessages: AgentMessage[]
-    ): Promise<AgentMessage[]> {
+        initialContext: AgentRunContext
+    ): Promise<AgentRunResult> {
         // Get config from session at the start of run
         const config = await this.session.getConfig();
         const allowedUris = config.allowedUris || [];
@@ -105,23 +105,24 @@ export class AgentRunner {
             );
         }
 
-        const messages = [...initialMessages];
+        const messages = [...initialContext.messages];
         const newMessages: AgentMessage[] = [];
         let loopCount = 0;
+        let status: AgentRunResult['status'] = 'completed';
+        let failure: AgentRunResult['error'];
 
         while (loopCount < this.maxLoops) {
             if (this.session.token.isCancellationRequested) {
+                status = 'cancelled';
                 break;
             }
             loopCount++;
 
-            let roundContent = '';
-            let roundReasoning = '';
-            let toolCalls: any[] = [];
-            let replayState: import('../llm/types').PiAiReplayState | undefined;
+            let assistantMessage: Extract<AgentMessage, { role: 'assistant' }>;
 
             try {
                 const result = await this.llmStreamHandler.streamResponse(
+                    initialContext.systemPrompt,
                     messages,
                     this.toolSet.getDefinitions(),
                     abortController.signal,
@@ -140,10 +141,7 @@ export class AgentRunner {
                         await this.session.replaceOutput(JSON.stringify(renderData), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
                     }
                 );
-                roundContent = result.roundContent;
-                roundReasoning = result.roundReasoning;
-                toolCalls = result.toolCalls;
-                replayState = result.replayState;
+                assistantMessage = result.message;
             } catch (error: any) {
                 // Handle network/API errors gracefully
                 const isCancellation = 
@@ -152,12 +150,17 @@ export class AgentRunner {
                     abortController.signal.aborted;
 
                 if (isCancellation) {
-                    // User-initiated cancellation, just end gracefully
+                    status = 'cancelled';
                     break;
                 }
 
                 // Network/API error - show notification and preserve history
                 const errorMessage = error.message || String(error);
+                status = 'failed';
+                failure = {
+                    code: typeof error.code === 'string' && error.code ? error.code : 'LLM_STREAM_ERROR',
+                    message: errorMessage,
+                };
                 console.error('LLM Stream Error:', error);
                 
                 // Show error as VSCode notification (non-modal)
@@ -173,65 +176,81 @@ export class AgentRunner {
 
                 const errorMarkdown = `\n\n> ⚠️ **Error**: ${errorMessage.replace(/\n/g, ' ')}\n\n*Execution stopped due to network error. Previous output is preserved above.*`;
                 this.uiRenderer.appendBlock({ type: 'content', markdown: errorMarkdown });
-                await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
+                try {
+                    await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
+                } catch (renderError) {
+                    console.error('Failed to render LLM error state:', renderError);
+                }
 
                 break;
             }
+
+            const textBlocks = assistantMessage.content.filter(block => block.type === 'text');
+            const thinkingBlocks = assistantMessage.content.filter(block => block.type === 'thinking');
+            const toolCalls = assistantMessage.content.filter((block): block is ToolCall => block.type === 'toolCall');
+            const roundContent = textBlocks.map(block => block.text).join('');
+            const roundReasoning = thinkingBlocks.map(block => block.thinking).join('');
+
+            const roundMessageStart = messages.length;
+            const newRoundStart = newMessages.length;
+            messages.push(assistantMessage);
+            newMessages.push(assistantMessage);
 
             if (!toolCalls.length && !roundContent && !roundReasoning) {
                 this.uiRenderer.appendBlock({ type: 'content', markdown: '_Mutsumi Debug: No content, reasoning, or tool calls received from API._' });
                 await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
-                const msg: AgentMessage = { role: 'assistant', content: roundContent };
-                if (roundReasoning) {
-                    msg.reasoning_content = roundReasoning;
-                }
-                if (replayState) msg.metadata = { ...msg.metadata, piAiReplay: replayState };
-                messages.push(msg);
-                newMessages.push(msg);
                 break;
             }
 
             if (toolCalls.length === 0) {
-                const assistantMsg: AgentMessage = { role: 'assistant', content: roundContent };
-                if (roundReasoning) {
-                    assistantMsg.reasoning_content = roundReasoning;
-                }
-                if (replayState) assistantMsg.metadata = { ...assistantMsg.metadata, piAiReplay: replayState };
-                messages.push(assistantMsg);
-                newMessages.push(assistantMsg);
                 break;
             }
 
-            const assistantMsgWithTool: AgentMessage = {
-                role: 'assistant',
-                content: roundContent || null,
-                tool_calls: toolCalls
-            };
-            if (roundReasoning) {
-                assistantMsgWithTool.reasoning_content = roundReasoning;
-            }
-            if (replayState) assistantMsgWithTool.metadata = { ...assistantMsgWithTool.metadata, piAiReplay: replayState };
-            messages.push(assistantMsgWithTool);
-            newMessages.push(assistantMsgWithTool);
-
             this.uiRenderer.commitRoundUI(roundContent, roundReasoning);
 
-            const result = await this.toolExecutor.executeTools(
-                toolCalls,
-                abortController.signal,
-                {
-                    appendOutput: async (block: RenderBlock) => {
-                        this.uiRenderer.appendBlock(block);
-                        await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
-                    },
-                    signalTermination: () => {
-                        // Termination handled via return values
+            let result: ToolExecutionResult;
+            try {
+                result = await this.toolExecutor.executeTools(
+                    toolCalls,
+                    abortController.signal,
+                    {
+                        appendOutput: async (block: RenderBlock) => {
+                            this.uiRenderer.appendBlock(block);
+                            await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
+                        },
+                        signalTermination: () => {
+                            // Termination handled via return values
+                        }
                     }
+                );
+            } catch (error: any) {
+                // An incomplete tool round cannot be replayed safely.
+                messages.splice(roundMessageStart);
+                newMessages.splice(newRoundStart);
+                if (abortController.signal.aborted || this.session.token.isCancellationRequested
+                    || error?.name === 'AbortError' || error?.name === 'APIUserAbortError') {
+                    status = 'cancelled';
+                } else {
+                    status = 'failed';
+                    failure = {
+                        code: typeof error?.code === 'string' && error.code ? error.code : 'TOOL_EXECUTION_ERROR',
+                        message: error?.message || String(error),
+                    };
+                    console.error('Tool execution infrastructure error:', error);
                 }
-            );
+                break;
+            }
             const toolMessages = result.messages;
             messages.push(...toolMessages);
             newMessages.push(...toolMessages);
+
+            if (abortController.signal.aborted || this.session.token.isCancellationRequested) {
+                // A cancelled tool round is not a replayable conversation turn.
+                messages.splice(roundMessageStart);
+                newMessages.splice(newRoundStart);
+                status = 'cancelled';
+                break;
+            }
 
             // Handle task completion (e.g., from task_finish tool)
             if (result.isTaskComplete) {
@@ -241,6 +260,20 @@ export class AgentRunner {
 
             // Handle other termination cases (e.g., edit rejection)
             if (result.shouldTerminate) {
+                status = 'failed';
+                failure = {
+                    code: 'TOOL_TERMINATED',
+                    message: 'A tool terminated the agent run before task completion',
+                };
+                break;
+            }
+
+            if (loopCount >= this.maxLoops) {
+                status = 'failed';
+                failure = {
+                    code: 'MAX_LOOPS_EXCEEDED',
+                    message: `Agent reached the maximum of ${this.maxLoops} tool interaction loops`,
+                };
                 break;
             }
         }
@@ -248,11 +281,15 @@ export class AgentRunner {
         // Generate title after first user message (only once)
         // Skip for LiteAgentSession which is used for background tasks like title generation
         const userMessageCount = messages.filter(m => m.role === 'user').length;
-        if (userMessageCount === 1 && !(this.session instanceof LiteAgentSession)) {
+        if (status === 'completed' && userMessageCount === 1 && !(this.session instanceof LiteAgentSession)) {
             void this.generateTitleIfNeeded(this.session, messages, config);
         }
 
-        return newMessages;
+        return {
+            messages: newMessages,
+            status,
+            ...(failure ? { error: failure } : {}),
+        };
     }
 
     /**

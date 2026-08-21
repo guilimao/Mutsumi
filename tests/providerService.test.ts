@@ -33,12 +33,12 @@ afterEach(() => {
 });
 
 describe('LlmProviderService registry', () => {
-    it('loads the built-in catalog and preserves the legacy Kimi alias', async () => {
+    it('loads the built-in catalog and rejects the removed legacy Kimi provider ID', async () => {
         const service = new LlmProviderService();
         await service.initialize(context());
-        const selection = service.resolveSelection({ provider: 'kimi-for-coding', model: 'kimi-for-coding' });
-        expect(selection.provider).toBe('kimi-coding');
+        const selection = service.resolveSelection({ provider: 'kimi-coding', model: 'kimi-for-coding' });
         expect(selection.modelInfo.input).toContain('image');
+        expect(() => service.resolveSelection({ provider: 'kimi-for-coding', model: 'kimi-for-coding' })).toThrow('not available');
     });
 
     it('rejects custom route collisions without replacing the previous registry', async () => {
@@ -53,7 +53,7 @@ describe('LlmProviderService registry', () => {
     });
 
     it.each([
-        [{ 'kimi-for-coding': { baseUrl: 'https://example.test/v1' } }, 'conflicts with a built-in provider'],
+        [{ 'kimi-for-coding': { baseUrl: 'https://example.test/v1' } }, 'uses a removed provider ID'],
         [{ local: { baseUrl: 'file:///tmp/models' } }, 'must use HTTP(S)'],
         [{ local: { baseUrl: 'https://user:secret@example.test/v1' } }, 'must not contain credentials'],
     ])('rejects unsafe or conflicting custom configuration', async (profiles, message) => {

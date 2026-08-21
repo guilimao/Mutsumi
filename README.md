@@ -283,7 +283,9 @@ Mutsumi defaults to the `kimi-for-coding` model on the built-in `kimi-coding` pr
 
 Keys are entered through a password input and stored in VS Code SecretStorage. They are never written to settings, `.mtm` files, model caches, or logs. The provider manager also supports non-secret custom OpenAI-compatible routes and `/models` discovery.
 
-Existing `mutsumi.providers` / `mutsumi.models` configurations are migration-only. On upgrade, accept the secure migration prompt or run **Mutsumi: Migrate Legacy Provider Credentials** manually. Rotate any key previously committed to version control.
+Mutsumi only accepts the current versioned `.mtm` format and current provider settings. Convert older files with the standalone migration project, then enter credentials again through **Mutsumi: Manage Model Providers**.
+
+The built-in **+ Markdown** button adds a user-only annotation. Its Markdown source and position are saved in the `.mtm` file, but the annotation is never sent to the model or included in conversation compression and title generation.
 
 > **Note:** This Agent framework is specifically designed and optimized around the Kimi base model family. Using `kimi-for-coding` is highly recommended.
 

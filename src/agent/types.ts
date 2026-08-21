@@ -4,6 +4,7 @@
  */
 
 import type { AgentStateInfo, AgentRuntimeStatus } from '../types';
+import type { AgentMessage } from '../types';
 
 // Re-export imported types
 export type { AgentStateInfo, AgentRuntimeStatus };
@@ -73,4 +74,24 @@ export interface DispatchSession {
     results: Map<string, string>;
     /** Set of child agent UUIDs that have been deleted */
     deletedChildren: Set<string>;
+}
+
+/** Provider-ready conversation state; system instructions are not persisted as messages. */
+export interface AgentRunContext {
+    systemPrompt?: string;
+    messages: AgentMessage[];
+}
+
+export type AgentRunStatus = 'completed' | 'failed' | 'cancelled';
+
+export interface AgentRunFailure {
+    code: string;
+    message: string;
+}
+
+/** Outcome of one run. Only native messages in this result may be persisted. */
+export interface AgentRunResult {
+    messages: AgentMessage[];
+    status: AgentRunStatus;
+    error?: AgentRunFailure;
 }

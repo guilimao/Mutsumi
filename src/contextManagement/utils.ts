@@ -34,6 +34,9 @@ export async function readImageAsBase64(
 ): Promise<string | null> {
 	try {
 		const uri = vscode.Uri.parse(uriStr);
+		if (uri.scheme === "data") {
+			return uriStr;
+		}
 		if (uri.scheme !== "file") {
 			if (uri.scheme === "http" || uri.scheme === "https") {
 				return uriStr;
@@ -85,13 +88,12 @@ export async function parseUserMessageWithImages(
 
 		try {
 			const imageBase64 = await readImageAsBase64(uriStr);
-			if (imageBase64) {
+			const match = imageBase64?.match(/^data:([^;,]+);base64,(.+)$/s);
+			if (match) {
 				content.push({
-					type: "image_url",
-					image_url: {
-						url: imageBase64,
-						detail: "auto",
-					},
+					type: "image",
+					mimeType: match[1],
+					data: match[2],
 				});
 			} else {
 				content.push({ type: "text", text: fullMatch });

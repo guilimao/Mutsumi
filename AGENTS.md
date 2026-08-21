@@ -37,16 +37,16 @@ src/
 
 ### 2.1 `.mtm` 文件模型与 Serializer（`notebook/serializer.ts`）
 
-`.mtm` 是 JSON：`{ metadata: AgentMetadata, context: AgentMessage[] }`。VS Code 通过 `NotebookSerializer` 把它与 Notebook 文档互相转换。
+`.mtm` 是 JSON：`{ formatVersion: 1, metadata: AgentMetadata, context: PersistedAgentMessage[], notes?: NotebookNote[] }`。VS Code 通过 `NotebookSerializer` 把它与 Notebook 文档互相转换。
 
 核心算法是 **messages ↔ generic cells 双向映射**（`messagesToGenericCells` / `genericCellsToMessages`），并被 HeadlessAdapter 复用，因此协议是"与 UI 无关"的：
 
 - User 消息 → Code cell（kind 2）
-- Assistant 消息 → Markup cell（kind 1）
+- Markup cell（kind 1）→ 用户注释，按 `notes.beforeUserIndex` 独立持久化，不进入 Agent 历史
 - **紧随 user 的 assistant/tool 消息组不单独建 cell**，而是存入该 user cell 的 `mutsumi_interaction` metadata，渲染为该 cell 的输出区（这是最反直觉的点）
-- System 消息 → 带 `**System**: ` 前缀的 Markup cell，反序列化时剥前缀
-- 孤儿 assistant/tool 消息（无前置 user）→ 直接拍平成 markdown 存 cell value，**不写** `mutsumi_interaction`
-- `mutsumi_interaction` **只存在于 user cell**，永不写在 assistant cell 上
+- Assistant/tool 消息必须附着于前置 user；磁盘中不支持孤儿 assistant/tool 或 system 消息
+- `mutsumi_interaction` **只存在于 user cell**，永不写在 Markup cell 上
+- 连续 user 是合法 pending turns；只在 provider 边界临时合并，磁盘 Cell 边界保持不变
 - cell value 中保存的幽灵块 markdown 在反序列化时剥离（`stripGhostBlockFromCell`），结构化版本在 metadata 中
 
 序列化时 `sub_agents_list` 与 `AgentOrchestrator` 内存注册表**双向同步**（打开时注入 childIds，保存时回写）。

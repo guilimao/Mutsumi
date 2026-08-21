@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { AgentMessage, AgentMetadata, MessageContent, ContextItem } from '../types';
+import type { Usage } from '@earendil-works/pi-ai';
+import { AgentMessage, AgentMetadata, ContextItem, PersistedAgentMessage } from '../types';
 import { IAgentSession } from '../adapters/interfaces';
 import { getSystemPrompt, getRulesContext } from './prompts';
 import { TemplateEngine } from './templateEngine';
@@ -16,6 +17,86 @@ import {
     computeHash
 } from './utils';
 
+const ZERO_USAGE: Usage = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function finiteNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
+function validUsage(value: unknown): value is Usage {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const usage = value as Record<string, unknown>;
+    if (!usage.cost || typeof usage.cost !== 'object' || Array.isArray(usage.cost)) return false;
+    const cost = usage.cost as Record<string, unknown>;
+    return ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'].every(key => finiteNumber(usage[key]))
+        && (usage.cacheWrite1h === undefined || finiteNumber(usage.cacheWrite1h))
+        && (usage.reasoning === undefined || finiteNumber(usage.reasoning))
+        && ['input', 'output', 'cacheRead', 'cacheWrite', 'total'].every(key => finiteNumber(cost[key]));
+}
+
+/** Create the strict temporary message shape required by pi-ai without changing disk data. */
+export function hydrateProviderMessage(message: PersistedAgentMessage): AgentMessage {
+    if (message.role === 'user') {
+        return {
+            ...message,
+            timestamp: finiteNumber(message.timestamp) ? message.timestamp : 0,
+        } as AgentMessage;
+    }
+    if (message.role === 'assistant') {
+        const stopReasons = new Set(['stop', 'length', 'toolUse', 'error', 'aborted']);
+        const inferredStopReason = message.content.some(block => block.type === 'toolCall') ? 'toolUse' : 'stop';
+        return {
+            ...message,
+            usage: validUsage(message.usage) ? message.usage : { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+            timestamp: finiteNumber(message.timestamp) ? message.timestamp : 0,
+            stopReason: typeof message.stopReason === 'string' && stopReasons.has(message.stopReason)
+                ? message.stopReason
+                : inferredStopReason,
+        } as AgentMessage;
+    }
+    return {
+        ...message,
+        usage: validUsage(message.usage) ? message.usage : { ...ZERO_USAGE, cost: { ...ZERO_USAGE.cost } },
+        timestamp: finiteNumber(message.timestamp) ? message.timestamp : 0,
+    } as AgentMessage;
+}
+
+function userContentParts(content: Extract<AgentMessage, { role: 'user' }>['content']) {
+    return typeof content === 'string' ? [{ type: 'text' as const, text: content }] : [...content];
+}
+
+/** Merge pending adjacent user turns only at the provider boundary. */
+export function mergeConsecutiveUserMessages(messages: AgentMessage[]): AgentMessage[] {
+    const merged: AgentMessage[] = [];
+    for (const message of messages) {
+        const previous = merged[merged.length - 1];
+        if (message.role !== 'user' || previous?.role !== 'user') {
+            merged.push(message);
+            continue;
+        }
+        const content = typeof previous.content === 'string' && typeof message.content === 'string'
+            ? `${previous.content}\n\n${message.content}`
+            : [
+                ...userContentParts(previous.content),
+                { type: 'text' as const, text: '\n\n' },
+                ...userContentParts(message.content),
+            ];
+        merged[merged.length - 1] = {
+            ...previous,
+            content,
+            timestamp: message.timestamp,
+        };
+    }
+    return merged;
+}
+
 /**
  * @description Build Agent's conversation history context.
  * Ghost blocks are consumed and persisted as structured GhostBlock objects;
@@ -26,10 +107,17 @@ import {
  */
 export async function buildInteractionHistory(
     session: IAgentSession,
-    currentPrompt?: string
-): Promise<{ messages: AgentMessage[], allowedUris: string[], isSubAgent: boolean }> {
+    currentPrompt?: string,
+    baseHistory?: PersistedAgentMessage[],
+): Promise<{
+    systemPrompt: string;
+    messages: AgentMessage[];
+    persistedMessages: PersistedAgentMessage[];
+    allowedUris: string[];
+    isSubAgent: boolean;
+}> {
     // Get current prompt from session if not provided
-    if (!currentPrompt) {
+    if (currentPrompt === undefined) {
         currentPrompt = await session.getInput();
     }
     const messages: AgentMessage[] = [];
@@ -73,11 +161,6 @@ export async function buildInteractionHistory(
     if (skillsMarkdown && skillsMarkdown.trim()) {
         systemPromptContent += '\n\n# Installed Skills\n' + skillsMarkdown;
     }
-
-    messages.push({
-        role: 'system',
-        content: systemPromptContent
-    });
 
     // Get previous ghost blocks for version tracking
     const previousGhostBlocks = session.getPreviousGhostBlocks
@@ -159,19 +242,18 @@ export async function buildInteractionHistory(
     newContextItemsForMetadata.push(...macroContextItems);
 
     // 3. Build Message History from session
-    const history = await session.getHistory();
+    const history = baseHistory ?? await session.getHistory();
 
     // Track ghost block index separately (only for user messages)
     let ghostBlockIndex = 0;
 
-    // Process raw history - expand interactions and attach ghost blocks
-    // NOTE: mutsumi_interaction ONLY exists on user messages, containing the
-    // assistant and tool messages that followed that user prompt
+    // Project persisted ghost blocks into provider-facing user content. The
+    // session already returns canonical, expanded pi-ai messages.
     for (const msg of history) {
         if (msg.role === 'user') {
-            const multiModalContent = await parseUserMessageWithImages(
-                typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
-            );
+            const multiModalContent = typeof msg.content === 'string'
+                ? await parseUserMessageWithImages(msg.content)
+                : [...msg.content];
             // Append the persisted ghost block if it exists
             const savedGhostBlock = previousGhostBlocks[ghostBlockIndex] ?? null;
             ghostBlockIndex++;
@@ -181,30 +263,23 @@ export async function buildInteractionHistory(
 
             if (savedGhostMarkdown) {
                 if (Array.isArray(multiModalContent)) {
-                    messages.push({ role: 'user', content: [...multiModalContent, { type: 'text', text: savedGhostMarkdown }] });
+                    messages.push(hydrateProviderMessage({
+                        role: 'user',
+                        content: [...multiModalContent, { type: 'text', text: savedGhostMarkdown }],
+                        timestamp: msg.timestamp,
+                    }));
                 } else {
-                    messages.push({ role: 'user', content: multiModalContent + savedGhostMarkdown });
+                    messages.push(hydrateProviderMessage({
+                        role: 'user',
+                        content: multiModalContent + savedGhostMarkdown,
+                        timestamp: msg.timestamp,
+                    }));
                 }
             } else {
-                messages.push({ role: 'user', content: multiModalContent });
+                messages.push(hydrateProviderMessage({ role: 'user', content: multiModalContent, timestamp: msg.timestamp }));
             }
-
-            // Expand mutsumi_interaction from user message metadata
-            // This contains the assistant response and any tool calls/results
-            const interaction = msg.metadata?.mutsumi_interaction as AgentMessage[] | undefined;
-            if (interaction && Array.isArray(interaction)) {
-                messages.push(...interaction);
-            }
-        } else if (msg.role === 'assistant') {
-            // Assistant messages in history are standalone (orphan messages without a preceding user)
-            // or legacy format. Add them directly.
-            messages.push(msg);
-        } else if (msg.role === 'system') {
-            // Skip, we already added system prompt
-            continue;
         } else {
-            // tool, etc. - add directly
-            messages.push(msg);
+            messages.push(hydrateProviderMessage(msg));
         }
     }
 
@@ -224,17 +299,28 @@ export async function buildInteractionHistory(
     }
 
     // 6. Push final message
+    const currentTimestamp = Date.now();
+    const persistedMessages: PersistedAgentMessage[] = [
+        ...history,
+        { role: 'user', content: currentPrompt, timestamp: currentTimestamp },
+    ];
     const currentMultiModalContent = await parseUserMessageWithImages(processedPrompt);
     if (currentGhostMarkdown) {
         if (Array.isArray(currentMultiModalContent)) {
             currentMultiModalContent.push({ type: 'text', text: currentGhostMarkdown });
-            messages.push({ role: 'user', content: currentMultiModalContent });
+            messages.push({ role: 'user', content: currentMultiModalContent, timestamp: currentTimestamp });
         } else {
-            messages.push({ role: 'user', content: currentMultiModalContent + currentGhostMarkdown });
+            messages.push({ role: 'user', content: currentMultiModalContent + currentGhostMarkdown, timestamp: currentTimestamp });
         }
     } else {
-        messages.push({ role: 'user', content: currentMultiModalContent });
+        messages.push({ role: 'user', content: currentMultiModalContent, timestamp: currentTimestamp });
     }
 
-    return { messages, allowedUris, isSubAgent };
+    return {
+        systemPrompt: systemPromptContent,
+        messages: mergeConsecutiveUserMessages(messages),
+        persistedMessages,
+        allowedUris,
+        isSubAgent,
+    };
 }

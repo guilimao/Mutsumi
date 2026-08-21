@@ -40,14 +40,17 @@ describe.each([
         const client = new LLMClient({ provider: `mock-${api}`, model: 'model', reasoningEffort: 'none' });
         const chunks = [];
         for await (const chunk of client.streamChatCompletion({
-            messages: [{ role: 'system', content: 'rules' }, { role: 'user', content: 'read it' }],
+            systemPrompt: 'rules',
+            messages: [{ role: 'user', content: 'read it', timestamp: 1 }],
             tools: [{ type: 'function', function: { name: 'read', parameters: { type: 'object' } } }],
         })) chunks.push(chunk);
 
-        expect(chunks[0].tool_calls?.[0]).toMatchObject({
-            id: 'call-1', function: { name: 'read', arguments: '{"path":"file.ts"}' },
+        expect(chunks[0]).toMatchObject({
+            type: 'toolcall_end', toolCall: { id: 'call-1', name: 'read', arguments: { path: 'file.ts' } },
         });
-        expect(chunks.at(-1)?.replayState).toMatchObject({ api, provider: `mock-${api}`, stopReason: 'toolUse' });
+        expect(chunks.at(-1)).toMatchObject({
+            type: 'done', message: { api, provider: `mock-${api}`, stopReason: 'toolUse' },
+        });
         expect(state.captured.context).toMatchObject({ systemPrompt: 'rules', tools: [{ name: 'read' }] });
         expect(state.captured.options).toMatchObject({ maxRetries: 0 });
         expect(state.captured.options).toMatchObject({ reasoning: 'off' });

@@ -4,7 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { AgentMessage, AgentMetadata, ContextItem } from '../types';
+import { AgentMetadata, ContextItem, PersistedAgentMessage } from '../types';
 import { GhostBlock } from '../contextManagement/interfaces';
 
 /**
@@ -88,7 +88,7 @@ export interface IAgentSession {
     /**
      * Get the full conversation history.
      */
-    getHistory(): Promise<AgentMessage[]>;
+    getHistory(): Promise<PersistedAgentMessage[]>;
 
     /**
      * Append output content (streaming UI updates).
@@ -129,7 +129,7 @@ export interface IAgentSession {
      * Set the full interaction history to be saved.
      * Used by NotebookAdapter to persist cell-specific history.
      */
-    setHistory(messages: AgentMessage[]): void;
+    setHistory(messages: PersistedAgentMessage[]): void;
 
     /**
      * Get the current output content.
@@ -175,8 +175,8 @@ export interface CellMetadata {
     last_ghost_block?: GhostBlock;
     /** Message role (user/assistant) */
     role?: string;
-    /** Pre-built interaction array for assistant cells */
-    mutsumi_interaction?: AgentMessage[];
+    /** Assistant/tool interaction rendered as output of a user cell */
+    mutsumi_interaction?: PersistedAgentMessage[];
     /** Other arbitrary metadata */
     [key: string]: any;
 }

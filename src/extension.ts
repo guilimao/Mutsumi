@@ -38,7 +38,6 @@ import { AgentTypeRegistry } from "./registry/agentTypeRegistry";
 import { resolveAgentDefaults, getEntryAgentTypes } from "./config/resolver";
 import { McpRegistry } from "./mcp/registry";
 import { LlmProviderService } from "./llm/providerService";
-import { registerLegacyProviderMigration } from "./llm/migration";
 
 /**
  * Checks if a file exists at the given URI.
@@ -109,7 +108,6 @@ export async function activate(
 	// Provider catalogs and SecretStorage must exist before model defaults are resolved.
 	const llmProviderService = LlmProviderService.getInstance();
 	await llmProviderService.initialize(context);
-	registerLegacyProviderMigration(context);
 
 	// Validate configuration before changing either runtime registry, then connect MCP
 	// servers before agent creation can consume their discovery snapshots.

@@ -84,7 +84,6 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
             ) ?? 'default';
 
             const modelItems: SelectModelQuickPickItem[] = [];
-            let legacyMatched = false;
             for (const [providerName, providerModels] of providerEntries) {
                 if (providerModels.length === 0) {
                     continue;
@@ -96,18 +95,7 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
                 });
                 for (const modelInfo of providerModels) {
                     const modelName = modelInfo.id;
-                    // When provider is stored in metadata, match on both model and provider.
-                    // For legacy notebooks without a provider field, fall back to
-                    // first-occurrence match on model name only.
-                    let isCurrent: boolean;
-                    if (currentProvider) {
-                        isCurrent = modelName === currentModel && providerName === currentProvider;
-                    } else {
-                        isCurrent = !legacyMatched && modelName === currentModel;
-                        if (isCurrent) {
-                            legacyMatched = true;
-                        }
-                    }
+                    const isCurrent = modelName === currentModel && providerName === currentProvider;
                     const detail = isCurrent ? '$(check) ' + t('selectModel.current') : undefined;
                     modelItems.push({
                         itemType: 'model',
