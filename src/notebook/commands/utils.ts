@@ -5,10 +5,12 @@
 
 import * as vscode from 'vscode';
 import { IAgentSession } from '../../adapters/interfaces';
-import { AgentMessage, AgentMetadata } from '../../types';
+import { AgentMessage, AgentMetadata, PersistedAgentMessage } from '../../types';
 import { LiteAdapter, LiteAgentSessionConfig } from '../../adapters/liteAdapter';
 import { GhostBlock, GhostFileEntry } from '../../contextManagement/interfaces';
 import { decodeGhostBlock, removeGhostFiles } from '../../contextManagement/ghostBlocks';
+import { messageText } from '../../llm/messageText';
+import { parsePersistedInteraction } from '../../mtmFormat';
 
 /**
  * Builds NotebookEdits that strip ghost file entries from every cell's last_ghost_block.
@@ -28,6 +30,7 @@ export function buildGhostStripEdits(
     const edits: vscode.NotebookEdit[] = [];
     for (let i = 0; i < notebook.cellCount; i++) {
         const cell = notebook.cellAt(i);
+        if (cell.kind !== vscode.NotebookCellKind.Code) continue;
         const raw = cell.metadata?.last_ghost_block;
         if (raw === undefined || raw === null) {
             continue;
@@ -74,25 +77,8 @@ export function formatMessagesToString(
         const msg = messages[i];
         content += `--- Message ${i + 1} [${msg.role.toUpperCase()}] ---\n\n`;
         
-        if (typeof msg.content === 'string') {
-            const displayContent = maxContentLength < msg.content.length 
-                ? msg.content.substring(0, maxContentLength) + '\n...(truncated)'
-                : msg.content;
-            content += displayContent;
-        } else if (Array.isArray(msg.content)) {
-            // Handle multi-modal content (text + images)
-            for (const part of msg.content) {
-                if (part.type === 'text') {
-                    const displayText = maxContentLength < part.text.length
-                        ? part.text.substring(0, maxContentLength) + '\n...(truncated)'
-                        : part.text;
-                    content += displayText;
-                } else if (part.type === 'image_url') {
-                    content += '[Image: ' + (part.image_url?.url?.substring(0, 50) || 'unknown') + '...]';
-                }
-                content += '\n';
-            }
-        }
+        const text = messageText(msg);
+        content += maxContentLength < text.length ? text.substring(0, maxContentLength) + '\n...(truncated)' : text;
         
         content += '\n\n';
     }
@@ -113,31 +99,24 @@ export async function createDebugSessionFromNotebook(
     const cell = notebook.cellAt(cellIndex);
 
     // Build raw history from cells before current
-    const history: AgentMessage[] = [];
+    const history: PersistedAgentMessage[] = [];
     for (let i = 0; i < cellIndex; i++) {
         const c = notebook.cellAt(i);
-        const role = c.metadata?.role || 'user';
+        if (c.kind !== vscode.NotebookCellKind.Code) continue;
         const content = c.document.getText();
 
-        if (content.trim()) {
-            if (role === 'user') {
-                history.push({ role: 'user', content });
-                // Expand mutsumi_interaction from user cell (contains assistant/tool messages)
-                const interaction = c.metadata?.mutsumi_interaction as AgentMessage[] | undefined;
-                if (interaction && Array.isArray(interaction)) {
-                    history.push(...interaction);
-                }
-            } else if (role === 'assistant') {
-                // Assistant cell content is directly in the cell value
-                history.push({ role: 'assistant', content });
-            }
-        }
+        history.push({ role: 'user', content, timestamp: c.metadata?.timestamp });
+        const interaction = parsePersistedInteraction(c.metadata?.mutsumi_interaction);
+        if (interaction) history.push(...interaction);
     }
 
     // Collect ghost blocks from previous cells
     const ghostBlocks: (GhostBlock | null)[] = [];
     for (let i = 0; i < cellIndex; i++) {
-        ghostBlocks.push(decodeGhostBlock(notebook.cellAt(i).metadata?.last_ghost_block));
+        const previousCell = notebook.cellAt(i);
+        if (previousCell.kind === vscode.NotebookCellKind.Code) {
+            ghostBlocks.push(decodeGhostBlock(previousCell.metadata?.last_ghost_block));
+        }
     }
 
     const adapter = new LiteAdapter();

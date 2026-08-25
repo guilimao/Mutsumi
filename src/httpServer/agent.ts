@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as express from 'express';
 import { getAgentFromRegistry } from './utils';
 import { AgentOrchestrator } from '../agent/agentOrchestrator';
-import type { AgentMessage, AgentContext } from '../types';
+import type { PersistedAgentMessage } from '../types';
+import { decodeAgentContext, isMtmFormatError } from '../mtmFormat';
 
 /**
  * Handle GET /agent/:uuid - Get agent details with full history
@@ -24,16 +25,17 @@ export async function handleGetAgent(req: express.Request, res: express.Response
 
     // Load full history from file
     const fileUri = vscode.Uri.parse(agent.fileUri);
-    let history: AgentMessage[] = [];
+    let history: PersistedAgentMessage[] = [];
     if (fileUri) {
         try {
             const content = await vscode.workspace.fs.readFile(fileUri);
-            const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
-            if (Array.isArray(data.context)) {
-                history = data.context;
+            history = decodeAgentContext(content).context;
+        } catch (error) {
+            if (isMtmFormatError(error)) {
+                res.status(422).json({ status: 'error', code: error.code, content: error.message });
+                return;
             }
-        } catch {
-            // Ignore, return empty history
+            throw error;
         }
     }
 

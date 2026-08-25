@@ -1,6 +1,13 @@
 import * as vscode from 'vscode';
 import { TextDecoder, TextEncoder } from 'util';
-import { AgentContext, AgentMessage, AgentMetadata, MessageContent } from '../types';
+import {
+    AgentContext,
+    AgentMessage,
+    AgentMetadata,
+    MTM_FORMAT_VERSION,
+    NotebookNote,
+    PersistedAgentMessage,
+} from '../types';
 import { AgentOrchestrator } from '../agent/agentOrchestrator';
 import { ToolManager } from '../tools.d/toolManager';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,6 +18,13 @@ import { GhostBlock } from '../contextManagement/interfaces';
 import { decodeGhostBlock } from '../contextManagement/ghostBlocks';
 import { t } from '../i18n';
 import type { McpToolSelection } from '../mcp/interfaces';
+import {
+    decodeAgentContext,
+    encodeAgentContext,
+    isMtmFormatError,
+    parsePersistedInteraction,
+    UNSUPPORTED_MTM_FORMAT,
+} from '../mtmFormat';
 
 // ============================================================================
 // Core Data Structures (VSCode-agnostic)
@@ -21,48 +35,53 @@ import type { McpToolSelection } from '../mcp/interfaces';
  * Used by both NotebookSerializer and HeadlessAdapter.
  */
 export interface GenericCellData {
-    /** Cell kind: 1 = Markup (assistant), 2 = Code (user) */
+    /** Cell kind: 1 = Markup note, 2 = Code user turn */
     kind: 1 | 2;
     /** Cell content value */
     value: string;
     /** Cell metadata including role, ghost blocks, interaction */
     metadata?: {
-        role?: 'user' | 'assistant' | 'system';
+        role?: 'user' | 'note';
+        timestamp?: unknown;
         /** Raw persisted ghost block metadata; decoded at adapter/serializer boundaries */
         last_ghost_block?: unknown;
-        mutsumi_interaction?: AgentMessage[];
+        mutsumi_interaction?: PersistedAgentMessage[];
         [key: string]: any;
     };
 }
 
 /**
- * Result of converting AgentMessage array to cells.
+ * Result of converting persisted messages to cells.
  */
 export interface MessageToCellsResult {
     cells: GenericCellData[];
 }
 
 /**
- * Convert AgentMessage array to generic cells (message grouping logic).
+ * Convert persisted messages and notes to generic cells (message grouping logic).
  * This is the core algorithm shared between Notebook and Headless adapters.
  * 
  * Rules:
  * - User messages become Code cells (kind: 2)
- * - Assistant messages become Markup cells (kind: 1)
- * - Consecutive assistant + tool messages are grouped into one cell's mutsumi_interaction
- * - System messages become Markup cells with special formatting
+ * - Markup cells are user-only notes restored from the top-level notes array
+ * - Consecutive assistant + toolResult messages are grouped into one cell's mutsumi_interaction
  * 
- * IMPORTANT: mutsumi_interaction ONLY exists on user cells, never on assistant cells.
+ * IMPORTANT: mutsumi_interaction ONLY exists on user cells, never on note cells.
  * Assistant/tool messages following a user message are stored in that user cell's
  * mutsumi_interaction array for rendering as output.
  */
-export function messagesToGenericCells(messages: AgentMessage[]): GenericCellData[] {
+export function messagesToGenericCells(
+    messages: PersistedAgentMessage[],
+    notes: NotebookNote[] = [],
+): GenericCellData[] {
     debugLogger.log(`[messagesToGenericCells] ==== START, input message count: ${messages?.length ?? 0} ====`);
     const cells: GenericCellData[] = [];
 
     if (!messages || messages.length === 0) {
-        debugLogger.log('[messagesToGenericCells] Empty messages array, returning empty cells');
-        return cells;
+        debugLogger.log('[messagesToGenericCells] Empty messages array, returning note cells only');
+        return notes
+            .filter(note => note.beforeUserIndex === 0)
+            .map(note => ({ kind: 1, value: note.markdown, metadata: { role: 'note' } }));
     }
 
     for (let i = 0; i < messages.length; i++) {
@@ -76,23 +95,21 @@ export function messagesToGenericCells(messages: AgentMessage[]): GenericCellDat
             const cell: GenericCellData = {
                 kind: 2,
                 value: cellValue,
-                metadata: { role: 'user' }
+                metadata: { role: 'user', timestamp: msg.timestamp }
             };
 
             // Preserve metadata (especially ghost block state)
-            if (msg.metadata) {
-                const { mutsumi_interaction, role, ...rest } = msg.metadata;
-                cell.metadata = { ...cell.metadata, ...rest };
-                debugLogger.log(`[messagesToGenericCells]   - Preserved metadata keys: ${Object.keys(rest).join(',')}`);
+            if (msg.mutsumi?.ghostBlock) {
+                cell.metadata!.last_ghost_block = msg.mutsumi.ghostBlock;
             }
 
             // Look ahead for associated assistant/tool messages
             // These will be stored in mutsumi_interaction and rendered as this cell's output
-            const group: AgentMessage[] = [];
+            const group: PersistedAgentMessage[] = [];
             let j = i + 1;
             while (j < messages.length) {
                 const next = messages[j];
-                if (next.role === 'user' || next.role === 'system') {
+                if (next.role === 'user') {
                     break;
                 }
                 group.push(next);
@@ -108,62 +125,34 @@ export function messagesToGenericCells(messages: AgentMessage[]): GenericCellDat
 
             cells.push(cell);
             debugLogger.log(`[messagesToGenericCells]   - Added user cell #${cells.length}`);
-        } else if (msg.role === 'system') {
-            // System message as Markup cell
-            const cellValue = serializeContentToString(msg.content);
-            debugLogger.log(`[messagesToGenericCells]   - System cell, content length: ${cellValue.length}`);
-            cells.push({
-                kind: 1,
-                value: `**System**: ${cellValue}`,
-                metadata: { role: 'system' }
-            });
-            debugLogger.log(`[messagesToGenericCells]   - Added system cell #${cells.length}`);
         } else {
-            // Assistant/tool message WITHOUT a preceding user message
-            // This is an orphan message (e.g., file starts with assistant message)
-            // Create a standalone assistant cell with NO mutsumi_interaction
-            debugLogger.log(`[messagesToGenericCells]   - Orphan assistant/tool message (no preceding user), starting group...`);
-            const group: AgentMessage[] = [msg];
-
-            while (i + 1 < messages.length) {
-                const next = messages[i + 1];
-                if (next.role === 'user' || next.role === 'system') {
-                    break;
-                }
-                group.push(next);
-                i++;
-            }
-
-            debugLogger.log(`[messagesToGenericCells]   - Orphan group formed with ${group.length} messages`);
-            // Orphan cells have no output area; render blocks are flattened to markdown cell source
-            const displayText = renderBlocksToMarkdown(buildInteractionRenderBlocks(group, false));
-
-            cells.push({
-                kind: 1,
-                value: displayText,
-                metadata: {
-                    role: 'assistant'
-                    // NOTE: No mutsumi_interaction here! Orphan assistant messages
-                    // are rendered directly to cell value, not stored in metadata.
-                }
-            });
-            debugLogger.log(`[messagesToGenericCells]   - Added orphan assistant cell #${cells.length}, displayText length: ${displayText.length}`);
+            throw new Error(t('serializer.standaloneMessagesUnsupported', MTM_FORMAT_VERSION));
         }
     }
 
-    debugLogger.log(`[messagesToGenericCells] ==== END, generated ${cells.length} cells ====`);
-    return cells;
+    const interleaved: GenericCellData[] = [];
+    for (let beforeUserIndex = 0; beforeUserIndex <= cells.length; beforeUserIndex++) {
+        for (const note of notes) {
+            if (note.beforeUserIndex === beforeUserIndex) {
+                interleaved.push({ kind: 1, value: note.markdown, metadata: { role: 'note' } });
+            }
+        }
+        if (beforeUserIndex < cells.length) interleaved.push(cells[beforeUserIndex]);
+    }
+
+    debugLogger.log(`[messagesToGenericCells] ==== END, generated ${interleaved.length} cells ====`);
+    return interleaved;
 }
 
 /**
- * Convert generic cells back to AgentMessage array.
+ * Convert generic cells back to persisted messages.
  * Used for serialization to file.
  * 
- * NOTE: mutsumi_interaction is ONLY expanded from user cells, never from assistant cells.
+ * NOTE: mutsumi_interaction is ONLY expanded from user cells; Markup notes are skipped.
  */
-export function genericCellsToMessages(cells: GenericCellData[]): AgentMessage[] {
+export function genericCellsToMessages(cells: GenericCellData[]): PersistedAgentMessage[] {
     debugLogger.log(`[genericCellsToMessages] ==== START, input ${cells?.length ?? 0} cells ====`);
-    const messages: AgentMessage[] = [];
+    const messages: PersistedAgentMessage[] = [];
 
     if (!cells || cells.length === 0) {
         debugLogger.log('[genericCellsToMessages] Empty cells array, returning empty messages');
@@ -172,31 +161,26 @@ export function genericCellsToMessages(cells: GenericCellData[]): AgentMessage[]
 
     for (let idx = 0; idx < cells.length; idx++) {
         const cell = cells[idx];
-        const role = cell.metadata?.role || 'user';
+        if (cell.kind === 1) {
+            debugLogger.log(`[genericCellsToMessages] Cell ${idx}: skipped Markup note`);
+            continue;
+        }
+        const role = 'user';
         debugLogger.log(`[genericCellsToMessages] Cell ${idx}: kind=${cell.kind}, role=${role}, value length=${cell.value?.length ?? 0}`);
 
-        if (role === 'system') {
-            messages.push({
-                role: 'system',
-                content: cell.value.replace('**System**: ', '')
-            });
-            debugLogger.log(`[genericCellsToMessages]   - Added system message`);
-        } else if (role === 'user') {
+        if (role === 'user') {
             // Strip ghost block from persisted content
             const cleanContent = stripGhostBlockFromCell(cell.value);
 
-            const userMsg: AgentMessage = {
+            const userMsg: PersistedAgentMessage = {
                 role: 'user',
-                content: cleanContent
+                content: parseSerializedUserContent(cleanContent),
+                timestamp: cell.metadata?.timestamp,
             };
 
-            // Preserve metadata (especially ghost block state)
-            if (cell.metadata) {
-                const { mutsumi_interaction, role, ...rest } = cell.metadata;
-                if (Object.keys(rest).length > 0) {
-                    userMsg.metadata = rest;
-                    debugLogger.log(`[genericCellsToMessages]   - Preserved metadata keys: ${Object.keys(rest).join(',')}`);
-                }
+            const ghostBlock = decodeGhostBlock(cell.metadata?.last_ghost_block);
+            if (ghostBlock) {
+                userMsg.mutsumi = { ghostBlock };
             }
 
             messages.push(userMsg);
@@ -204,19 +188,30 @@ export function genericCellsToMessages(cells: GenericCellData[]): AgentMessage[]
 
             // Expand interaction if exists (ONLY for user cells)
             if (cell.metadata?.mutsumi_interaction) {
-                messages.push(...cell.metadata.mutsumi_interaction);
-                debugLogger.log(`[genericCellsToMessages]   - Expanded interaction: ${cell.metadata.mutsumi_interaction.length} messages`);
+                const interaction = parsePersistedInteraction(cell.metadata.mutsumi_interaction);
+                if (interaction) {
+                    messages.push(...interaction);
+                    debugLogger.log(`[genericCellsToMessages]   - Expanded interaction: ${interaction.length} messages`);
+                } else {
+                    debugLogger.log(`[genericCellsToMessages]   - Ignored malformed interaction on cell ${idx}`);
+                }
             }
-        } else {
-            // Assistant cell: use cell value directly, ignore any mutsumi_interaction
-            // (mutsumi_interaction should never exist on assistant cells, but handle gracefully)
-            messages.push({ role: 'assistant', content: cell.value });
-            debugLogger.log(`[genericCellsToMessages]   - Added assistant message from cell value, content length: ${cell.value.length}`);
         }
     }
 
     debugLogger.log(`[genericCellsToMessages] ==== END, generated ${messages.length} messages ====`);
     return messages;
+}
+
+/** Extract Markup notes, anchored by the number of preceding Code/user cells. */
+export function extractNotebookNotes(cells: GenericCellData[]): NotebookNote[] {
+    const notes: NotebookNote[] = [];
+    let userCount = 0;
+    for (const cell of cells) {
+        if (cell.kind === 2) userCount++;
+        else notes.push({ beforeUserIndex: userCount, markdown: cell.value });
+    }
+    return notes;
 }
 
 /**
@@ -240,83 +235,40 @@ export function extractGhostBlocksFromCells(cells: GenericCellData[]): (GhostBlo
 
 /**
  * Build RenderBlocks from an interaction message group.
- * Pure function shared by deserializeNotebook output generation and orphan cell rendering.
+ * Pure function shared by deserializeNotebook output generation.
  */
-function buildInteractionRenderBlocks(group: AgentMessage[], isSubAgent: boolean): RenderBlock[] {
+function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent: boolean): RenderBlock[] {
     const blocks: RenderBlock[] = [];
-    const toolCallMap = new Map<string, { name: string; args: any }>();
+    const toolResults = new Map<string, Extract<PersistedAgentMessage, { role: 'toolResult' }>>();
+    for (const message of group) {
+        if (message.role === 'toolResult') toolResults.set(message.toolCallId, message);
+    }
 
     for (const m of group) {
         if (m.role === 'assistant') {
-            // Build tool call map
-            if (m.tool_calls) {
-                for (const tc of m.tool_calls) {
-                    let parsedArgs: any = {};
-                    if (tc.function?.arguments) {
-                        try { parsedArgs = JSON.parse(tc.function.arguments); } catch { parsedArgs = {}; }
-                    }
-                    if (tc.id) {
-                        toolCallMap.set(tc.id, { name: tc.function.name, args: parsedArgs });
-                    }
+            for (const part of m.content) {
+                if (part.type === 'thinking' && part.thinking) {
+                    blocks.push({ type: 'reasoning', markdown: part.thinking, collapsed: true });
+                } else if (part.type === 'text' && part.text) {
+                    blocks.push({ type: 'content', markdown: part.text });
+                } else if (part.type === 'toolCall') {
+                    const result = toolResults.get(part.id);
+                    const summary = ToolManager.getInstance().getPrettyPrint(part.name, part.arguments, isSubAgent);
+                    const renderingConfig = ToolManager.getInstance().getToolRenderingConfig(part.name, isSubAgent);
+                    blocks.push({
+                        type: 'toolCall',
+                        name: part.name,
+                        args: part.arguments,
+                        summary,
+                        result: result ? serializeContentToString(result.content) : undefined,
+                        isStreaming: false,
+                        renderingConfig,
+                    });
                 }
             }
-            // Add reasoning block if exists
-            const reasoningStr = m.reasoning_content || '';
-            if (reasoningStr) {
-                blocks.push({ type: 'reasoning', markdown: reasoningStr, collapsed: true });
-            }
-            // Add content block if exists
-            const contentStr = serializeContentToString(m.content);
-            if (contentStr) {
-                blocks.push({ type: 'content', markdown: contentStr });
-            }
-        } else if (m.role === 'tool') {
-            // Add tool call block
-            const contentStr = serializeContentToString(m.content);
-            const mapped = m.tool_call_id ? toolCallMap.get(m.tool_call_id) : undefined;
-            const toolName = mapped?.name ?? m.name ?? 'unknown';
-            const args = mapped?.args ?? {};
-            const prettyPrintSummary = mapped
-                ? ToolManager.getInstance().getPrettyPrint(toolName, args, isSubAgent)
-                : `Tool Call: ${toolName}`;
-
-            // Look up code-block rendering hints so args like new_content are
-            // rendered as <pre><code> blocks (with language detection) instead
-            // of plain list items when the notebook is re-opened from disk.
-            const renderingConfig = ToolManager.getInstance().getToolRenderingConfig(toolName, isSubAgent);
-
-            blocks.push({
-                type: 'toolCall',
-                name: toolName,
-                args: args,
-                summary: prettyPrintSummary,
-                result: contentStr,
-                isStreaming: false,
-                renderingConfig
-            });
         }
     }
     return blocks;
-}
-
-/**
- * Flatten RenderBlocks to a plain markdown string.
- * Used for orphan assistant cells whose content is stored directly in cell source
- * (these cells have no output area, so the custom renderer cannot be used).
- */
-function renderBlocksToMarkdown(blocks: RenderBlock[]): string {
-    const parts: string[] = [];
-    for (const block of blocks) {
-        if (block.type === 'reasoning') {
-            parts.push(`> **Reasoning**\n>\n> ${block.markdown.split('\n').join('\n> ')}`);
-        } else if (block.type === 'content') {
-            parts.push(block.markdown);
-        } else if (block.type === 'toolCall') {
-            const header = block.summary || `Tool Call: ${block.name}`;
-            parts.push(`**${header}**${block.result ? `\n\n\`\`\`\n${block.result}\n\`\`\`` : ''}`);
-        }
-    }
-    return parts.join('\n\n');
 }
 
 /**
@@ -331,18 +283,35 @@ function stripGhostBlockFromCell(value: string): string {
     return value;
 }
 
+/** Restore native image blocks emitted by serializeContentToString. */
+function parseSerializedUserContent(value: string): Extract<AgentMessage, { role: 'user' }>['content'] {
+    const pattern = /!\[[^\]]*\]\(data:([^;,]+);base64,([^)]+)\)/g;
+    const matches = [...value.matchAll(pattern)];
+    if (matches.length === 0) return value;
+    const parts: Extract<AgentMessage, { role: 'user' }>['content'] = [];
+    let offset = 0;
+    for (const match of matches) {
+        const index = match.index ?? 0;
+        if (index > offset) parts.push({ type: 'text', text: value.slice(offset, index) });
+        parts.push({ type: 'image', mimeType: match[1], data: match[2] });
+        offset = index + match[0].length;
+    }
+    if (offset < value.length) parts.push({ type: 'text', text: value.slice(offset) });
+    return parts;
+}
+
 /**
  * Serialize message content to string.
  */
-function serializeContentToString(content: MessageContent | null | undefined): string {
+function serializeContentToString(content: string | readonly ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]): string {
     if (!content) return '';
     if (typeof content === 'string') return content;
 
     return content.map(part => {
         if (part.type === 'text') {
             return part.text;
-        } else if (part.type === 'image_url') {
-            return `![image](${part.image_url.url})`;
+        } else if (part.type === 'image') {
+            return `![image](data:${part.mimeType};base64,${part.data})`;
         }
         return '';
     }).join('');
@@ -378,39 +347,23 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
         _token: vscode.CancellationToken
     ): Promise<vscode.NotebookData> {
         debugLogger.log('[deserializeNotebook] ==== START ====');
-        const contents = new TextDecoder().decode(content);
-        debugLogger.log(`[deserializeNotebook] Decoded content length: ${contents.length} chars`);
-
         let raw: AgentContext;
         try {
-            raw = JSON.parse(contents);
-            debugLogger.log(`[deserializeNotebook] JSON parsed successfully`);
-            debugLogger.log(`[deserializeNotebook] Metadata uuid: ${raw.metadata?.uuid}`);
-            debugLogger.log(`[deserializeNotebook] Context message count: ${raw.context?.length ?? 0}`);
-            if (raw.context && raw.context.length > 0) {
-                raw.context.forEach((msg, idx) => {
-                    debugLogger.log(`[deserializeNotebook] Message ${idx}: role=${msg.role}, content length=${typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length}`);
-                });
+            raw = decodeAgentContext(content);
+        } catch (error) {
+            if (isMtmFormatError(error)) {
+                const message = error.code === UNSUPPORTED_MTM_FORMAT
+                    ? t('serializer.unsupportedFormat', MTM_FORMAT_VERSION, String(error.actualVersion))
+                    : t('serializer.invalidFormat', error.message);
+                void vscode.window.showErrorMessage(message);
             }
-        } catch (err) {
-            debugLogger.log(`[deserializeNotebook] JSON parse FAILED: ${err}`);
-            // Create default Agent context when parsing fails
-            raw = {
-                metadata: {
-                    uuid: uuidv4(),
-                    name: t('serializer.newAgent'),
-                    created_at: new Date().toISOString(),
-                    parent_agent_id: null,
-                    allowed_uris: ['/'],
-                    contextItems: []
-                },
-                context: []
-            };
+            throw error;
         }
+        debugLogger.log(`[deserializeNotebook] Parsed formatVersion=${raw.formatVersion}, uuid=${raw.metadata.uuid}`);
 
         // Use generic cell conversion
         debugLogger.log(`[deserializeNotebook] Converting ${raw.context?.length ?? 0} messages to generic cells...`);
-        const genericCells = messagesToGenericCells(raw.context);
+        const genericCells = messagesToGenericCells(raw.context, raw.notes);
         debugLogger.log(`[deserializeNotebook] Generated ${genericCells.length} generic cells`);
         genericCells.forEach((cell, idx) => {
             debugLogger.log(`[deserializeNotebook] GenericCell ${idx}: kind=${cell.kind}, role=${cell.metadata?.role}, value length=${cell.value?.length ?? 0}, has interaction=${!!cell.metadata?.mutsumi_interaction}`);
@@ -489,6 +442,7 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
         });
 
         const raw: AgentContext = {
+            formatVersion: MTM_FORMAT_VERSION,
             metadata: {
                 uuid: uuid ?? uuidv4(),
                 name: t('serializer.newAgent'),
@@ -511,7 +465,7 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
             },
             context: []
         };
-        return new TextEncoder().encode(JSON.stringify(raw, null, 2));
+        return encodeAgentContext(raw);
     }
 
     /**
@@ -545,6 +499,7 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
         // Use generic conversion
         debugLogger.log(`[serializeNotebook] Converting ${genericCells.length} generic cells to messages...`);
         const context = genericCellsToMessages(genericCells);
+        const notes = extractNotebookNotes(genericCells);
         debugLogger.log(`[serializeNotebook] Generated ${context.length} messages`);
         context.forEach((msg, idx) => {
             debugLogger.log(`[serializeNotebook] Message ${idx}: role=${msg.role}, content length=${typeof msg.content === 'string' ? msg.content.length : JSON.stringify(msg.content).length}`);
@@ -563,11 +518,13 @@ export class MutsumiSerializer implements vscode.NotebookSerializer {
         }
 
         const output: AgentContext = {
+            formatVersion: MTM_FORMAT_VERSION,
             metadata,
-            context
+            context,
+            ...(notes.length > 0 ? { notes } : {}),
         };
 
-        const encoded = new TextEncoder().encode(JSON.stringify(output, null, 2));
+        const encoded = encodeAgentContext(output);
         debugLogger.log(`[serializeNotebook] ==== END, output size: ${encoded.length} bytes ====`);
         return encoded;
     }

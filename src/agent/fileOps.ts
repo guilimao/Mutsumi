@@ -7,9 +7,10 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { resolveModelSelection } from '../utils';
-import { AgentStateInfo, ContextItem, ModelSelection } from '../types';
+import { AgentContext, AgentMessage, AgentStateInfo, ContextItem, ModelSelection, MTM_FORMAT_VERSION } from '../types';
 import { resolveAgentDefaults } from '../config/resolver';
 import { McpRegistry } from '../mcp/registry';
+import { decodeAgentContext, encodeAgentContext } from '../mtmFormat';
 
 /**
  * Handles file-based operations for agents.
@@ -60,7 +61,7 @@ export class AgentFileOperations {
                     const fileUri = agentDir.with({ path: path.posix.join(agentDir.path, name) });
                     try {
                         const content = await vscode.workspace.fs.readFile(fileUri);
-                        const data = JSON.parse(new TextDecoder().decode(content));
+                        const data = decodeAgentContext(content);
                         
                         if (data.metadata && data.metadata.uuid) {
                             agents.push({
@@ -101,7 +102,7 @@ export class AgentFileOperations {
 
         try {
             const content = await vscode.workspace.fs.readFile(fileUri);
-            const data = JSON.parse(new TextDecoder().decode(content));
+            const data = decodeAgentContext(content);
             
             const agent: AgentStateInfo = {
                 uuid,
@@ -138,7 +139,7 @@ export class AgentFileOperations {
      *   'Process files',
      *   ['/workspace'],
      *   'implementer',
-     *   { model: 'kimi-for-coding', provider: 'kimi-for-coding' },
+     *   { model: 'kimi-for-coding', provider: 'kimi-coding' },
      *   []
      * );
      */
@@ -184,7 +185,9 @@ export class AgentFileOperations {
         // Determine name and context based on prompt
         const hasPrompt = prompt && prompt.trim().length > 0;
         const agentName = hasPrompt ? prompt!.slice(0, 20) + '...' : 'New Agent';
-        const context = hasPrompt ? [{ role: 'user', content: prompt }] : [];
+        const context: AgentMessage[] = hasPrompt
+            ? [{ role: 'user', content: prompt!, timestamp: Date.now() }]
+            : [];
 
         // Inject ROLE macro based on agentType (user could override later)
         contextItems = contextItems ?? [];
@@ -194,7 +197,8 @@ export class AgentFileOperations {
             content: agentType
         });
 
-        const content: any = {
+        const content: AgentContext = {
+            formatVersion: MTM_FORMAT_VERSION,
             metadata: {
                 uuid: uuid,
                 name: agentName,
@@ -214,7 +218,7 @@ export class AgentFileOperations {
             context: context
         };
         
-        const encoded = new TextEncoder().encode(JSON.stringify(content, null, 2));
+        const encoded = encodeAgentContext(content);
         await vscode.workspace.fs.writeFile(fileUri, encoded);
 
         return fileUri;
@@ -256,11 +260,11 @@ export class AgentFileOperations {
             } else {
                 // Document not open, write directly to file
                 const content = await vscode.workspace.fs.readFile(fileUri);
-                const data = JSON.parse(new TextDecoder().decode(content));
+                const data = decodeAgentContext(content);
                 
                 data.metadata.parent_agent_id = newParentId;
                 
-                const encoded = new TextEncoder().encode(JSON.stringify(data, null, 2));
+                const encoded = encodeAgentContext(data);
                 await vscode.workspace.fs.writeFile(fileUri, encoded);
             }
             return true;
@@ -303,12 +307,12 @@ export class AgentFileOperations {
             await vscode.workspace.applyEdit(edit);
         } else {
             const content = await vscode.workspace.fs.readFile(fileUri);
-            const data = JSON.parse(new TextDecoder().decode(content));
+            const data = decodeAgentContext(content);
 
             data.metadata.model = resolved.model;
             data.metadata.provider = resolved.provider;
 
-            const encoded = new TextEncoder().encode(JSON.stringify(data, null, 2));
+            const encoded = encodeAgentContext(data);
             await vscode.workspace.fs.writeFile(fileUri, encoded);
         }
     }
@@ -345,11 +349,11 @@ export class AgentFileOperations {
             } else {
                 // Document not open, write directly to file
                 const content = await vscode.workspace.fs.readFile(fileUri);
-                const data = JSON.parse(new TextDecoder().decode(content));
+                const data = decodeAgentContext(content);
                 
                 data.metadata.sub_agents_list = Array.from(parent.childIds || []);
                 
-                const encoded = new TextEncoder().encode(JSON.stringify(data, null, 2));
+                const encoded = encodeAgentContext(data);
                 await vscode.workspace.fs.writeFile(fileUri, encoded);
             }
             return true;
@@ -380,11 +384,7 @@ export class AgentFileOperations {
         try {
             // Read file content
             const content = await vscode.workspace.fs.readFile(uri);
-            const data = JSON.parse(new TextDecoder().decode(content));
-
-            if (!data.metadata) {
-                throw new Error(`Invalid mtm file: missing metadata`);
-            }
+            const data = decodeAgentContext(content);
 
             // Generate new UUID
             const newUuid = uuidv4();
@@ -398,7 +398,7 @@ export class AgentFileOperations {
             data.metadata.created_at = new Date().toISOString();
 
             // Write back to file
-            const encoded = new TextEncoder().encode(JSON.stringify(data, null, 2));
+            const encoded = encodeAgentContext(data);
             await vscode.workspace.fs.writeFile(uri, encoded);
 
             return { newUuid, newMetadata: data.metadata };

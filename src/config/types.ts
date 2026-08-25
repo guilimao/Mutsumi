@@ -71,7 +71,7 @@ export const DEFAULT_MUTSUMI_CONFIG: MutsumiConfig = {
 	agentTypes: {
 		chat: {
 			toolSets: ["read"],
-			defaultModel: { model: "kimi-for-coding", provider: "kimi-for-coding" },
+			defaultModel: { model: "kimi-for-coding", provider: "kimi-coding" },
 			defaultRules: ["default/chat.md"],
 			defaultSkills: [],
 			allowedChildTypes: [],
@@ -79,7 +79,7 @@ export const DEFAULT_MUTSUMI_CONFIG: MutsumiConfig = {
 		},
 		implementer: {
 			toolSets: ["read", "deliver", "dispatch"],
-			defaultModel: { model: "kimi-for-coding", provider: "kimi-for-coding" },
+			defaultModel: { model: "kimi-for-coding", provider: "kimi-coding" },
 			defaultRules: ["default/implementer.md"],
 			defaultSkills: [],
 			allowedChildTypes: ["implementer", "reviewer"],
@@ -87,7 +87,7 @@ export const DEFAULT_MUTSUMI_CONFIG: MutsumiConfig = {
 		},
 		orchestrator: {
 			toolSets: ["read", "deliver", "dispatch"],
-			defaultModel: { model: "kimi-for-coding", provider: "kimi-for-coding" },
+			defaultModel: { model: "kimi-for-coding", provider: "kimi-coding" },
 			defaultRules: ["default/orchestrator.md"],
 			defaultSkills: [],
 			allowedChildTypes: ["implementer", "reviewer"],
@@ -95,7 +95,7 @@ export const DEFAULT_MUTSUMI_CONFIG: MutsumiConfig = {
 		},
 		reviewer: {
 			toolSets: ["read"],
-			defaultModel: { model: "kimi-for-coding", provider: "kimi-for-coding" },
+			defaultModel: { model: "kimi-for-coding", provider: "kimi-coding" },
 			defaultRules: ["default/reviewer.md"],
 			defaultSkills: [],
 			allowedChildTypes: [],

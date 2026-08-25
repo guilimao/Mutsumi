@@ -275,21 +275,17 @@ code --install-extension mutsumi-【版本号】.vsix
 
 ### 配置
 
-Mutsumi 默认使用 `kimi-for-coding` 模型。你只需在 VS Code 设置中填入 API Key 即可开始使用。
+Mutsumi 默认使用内置 `kimi-coding` 提供商的 `kimi-for-coding` 模型。
 
-打开 `settings.json`，添加：
+1. 打开命令面板，运行 **Mutsumi: 管理模型提供商**。
+2. 选择 Kimi Coding（或其他内置提供商）并输入 API Key。
+3. 运行 **Mutsumi: 选择模型**，从已由 VS Code SecretStorage 或受支持环境凭据完成鉴权的提供商中选择模型。
 
-```json
-"mutsumi.providers": [
-    {
-        "name": "kimi-for-coding",
-        "baseurl": "https://api.kimi.com/coding/v1",
-        "api_key": "sk-kimi-XXXXXXXXXXXXXXXXXXXXXX"
-    }
-]
-```
+密钥通过密码输入框录入并存入 VS Code SecretStorage，绝不会写入设置、`.mtm` 文件、模型缓存或日志。提供商管理器还支持不含秘密的自定义 OpenAI-compatible 路由及 `/models` 自动发现。
 
-如需使用其他模型或服务商，可相应配置 `mutsumi.providers` 和 `mutsumi.models`，具体示例请参见 VS Code 设置中的说明。
+Mutsumi 仅接受当前带版本标识的 `.mtm` 格式和当前提供商设置。旧文件请通过独立迁移项目转换，然后在 **Mutsumi: 管理模型提供商** 中重新录入凭据。
+
+VS Code 内置的 **+ Markdown** 按钮会添加仅供用户查看的注释。Markdown 源文本及其位置会保存到 `.mtm` 文件，但不会发送给模型，也不会进入会话压缩或标题生成。
 
 > **注意：** 本 Agent 框架针对 Kimi 基模家族调性优化设计，强烈建议使用 `kimi-for-coding`。
 

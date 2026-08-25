@@ -6,8 +6,8 @@
  */
 
 import { RenderBlock, RenderData } from '../notebook/renderTypes';
-import { tryParsePartialJson } from './utils';
 import type { ToolSet } from '../tools.d/toolManager';
+import type { ToolCall } from '@earendil-works/pi-ai';
 
 /**
  * Accumulates agent output as structured render blocks.
@@ -150,7 +150,7 @@ export class UIRenderer {
      * @returns {RenderBlock[]} Pending tool call blocks
      */
     formatPendingToolCalls(
-        partialToolCalls: any[] | undefined,
+        partialToolCalls: ToolCall[] | undefined,
         toolSet: ToolSet,
         _isSubAgent?: boolean
     ): RenderBlock[] {
@@ -159,9 +159,9 @@ export class UIRenderer {
         }
         const blocks: RenderBlock[] = [];
         for (const ptc of partialToolCalls) {
-            const toolName = ptc.function?.name;
+            const toolName = ptc.name;
             if (!toolName) { continue; }
-            const args = tryParsePartialJson(ptc.function?.arguments);
+            const args = ptc.arguments ?? {};
             const summary = toolSet.getPrettyPrint(toolName, args);
             const config = toolSet.getRenderingConfig(toolName);
             blocks.push(this.formatToolCall(toolName, args, summary, true, undefined, config));

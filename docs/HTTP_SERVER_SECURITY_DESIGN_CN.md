@@ -20,7 +20,7 @@ HTTP Server 默认关闭；用户显式开启后，所有端点必须携带正�
 | 决策点 | 结论 |
 |---|---|
 | 认证头 | 标准 `Authorization: Bearer <password>`（scheme 匹配按 RFC 7235 大小写不敏感） |
-| 密码存储 | 明文存于 VS Code 设置（与现有 `mutsumi.providers[].api_key` 明文策略一致），设置描述中注明 |
+| 密码存储 | HTTP Server 密码仍按本设计存于 VS Code 设置；LLM API Key 已独立迁移到 VS Code SecretStorage，不再以此作为类比 |
 | 密码比较 | 常量时间比较（`crypto.timingSafeEqual` 或等效手段），避免时序侧信道 |
 | 空密码行为 | `enabled=true` 但密码为空 → **拒绝启动**，弹警告通知，提供"打开设置"与"生成随机密码"入口 |
 | 浏览器/CSRF 防护 | 不实现。Bearer 头本身即非简单请求头，天然阻断浏览器预检外请求；无浏览器使用场景 |

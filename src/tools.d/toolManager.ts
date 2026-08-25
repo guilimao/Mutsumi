@@ -3,7 +3,7 @@
  * @module toolManager
  */
 
-import type { ITool, ToolContext } from "./interface";
+import type { ITool, ToolContext, ToolDefinition } from "./interface";
 import { readFileTool } from "./tools/read";
 import { globTool } from "./tools/glob";
 import { grepTool } from "./tools/grep";
@@ -29,7 +29,6 @@ import { queryCodebaseTool } from "./tools/rag";
 import { AgentTypeRegistry } from "../registry/agentTypeRegistry";
 import { ToolSetRegistry } from "../registry/toolSetRegistry";
 import * as vscode from "vscode";
-import type OpenAI from "openai";
 import { getCachedResult, setCachedResult } from "./cache";
 import { McpRegistry } from "../mcp/registry";
 import { McpToolAdapter } from "../mcp/tool";
@@ -97,10 +96,9 @@ export class ToolSet {
 	}
 
 	/**
-	 * Gets all tool definitions formatted for OpenAI API.
-	 * @returns {OpenAI.Chat.ChatCompletionTool[]} Array of tool definitions
+	 * Gets provider-neutral function tool definitions.
 	 */
-	getDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
+	getDefinitions(): ToolDefinition[] {
 		return Array.from(this.tools.values()).map((t) => t.definition);
 	}
 
@@ -419,13 +417,12 @@ export class ToolManager {
 	}
 
 	/**
-	 * Gets tool definitions formatted for OpenAI API.
+	 * Gets provider-neutral function tool definitions.
 	 * @param {boolean} isSubAgent - True for non-root/child sessions (includes task_finish)
-	 * @returns {OpenAI.Chat.ChatCompletionTool[]} Array of tool definitions
 	 */
 	public getToolsDefinitions(
 		isSubAgent: boolean,
-	): OpenAI.Chat.ChatCompletionTool[] {
+	): ToolDefinition[] {
 		return this.getUserToolSet(isSubAgent).getDefinitions();
 	}
 

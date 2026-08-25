@@ -1,5 +1,4 @@
 import type * as vscode from 'vscode';
-import type OpenAI from 'openai';
 import type { IAgentSession } from '../adapters/interfaces';
 import type { ToolSession } from './toolSession';
 
@@ -23,9 +22,19 @@ export interface ToolContext {
     signalTermination: (isTaskComplete?: boolean) => void;
 }
 
+/** Provider-neutral function tool schema accepted by pi-ai and MCP adapters. */
+export interface ToolDefinition {
+    type: 'function';
+    function: {
+        name: string;
+        description?: string;
+        parameters?: Record<string, any>;
+    };
+}
+
 export interface ITool {
     name: string;
-    definition: OpenAI.Chat.ChatCompletionTool;
+    definition: ToolDefinition;
     execute(args: any, context: ToolContext): Promise<string>;
     /**
      * Generate a human-readable description of the tool call.

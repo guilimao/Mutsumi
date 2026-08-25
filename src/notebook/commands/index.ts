@@ -9,4 +9,5 @@ export { registerDebugContextCommand } from './debugContext';
 export { registerToggleAutoApproveCommands } from './toggleAutoApprove';
 export { registerTestRagSearchCommand } from './testRagSearch';
 export { registerCompressConversationCommand } from './compressConversation';
+export { registerManageProvidersCommand } from './manageProviders';
 export { registerPruneGhostBlocksCommand } from './pruneGhostBlocks';

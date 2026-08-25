@@ -28,7 +28,7 @@ export { ResolvedAgentDefaults, ResolveAgentDefaultsOptions } from './interfaces
  * @example
  * // With overrides and filtering
  * const defaults = resolveAgentDefaults('implementer', {
- *     modelSelection: { model: 'kimi-for-coding', provider: 'kimi-for-coding' },
+ *     modelSelection: { model: 'kimi-for-coding', provider: 'kimi-coding' },
  *     availableRules: ['default.md', 'custom.md']
  * });
  */

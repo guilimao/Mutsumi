@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { Request, Response } from 'express';
 import { getWorkspaceRoot, getAvailableRules, getAgentFromRegistry } from './utils';
-import type { AgentContext } from '../types';
+import { decodeAgentContext, encodeAgentContext, isMtmFormatError } from '../mtmFormat';
 
 /**
  * GET /rules - Get all available rule filenames
@@ -119,13 +119,13 @@ export async function handleSetRules(req: Request, res: Response): Promise<void>
     try {
         // Read current content
         const content = await vscode.workspace.fs.readFile(fileUri);
-        const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
+        const data = decodeAgentContext(content);
 
         // Update activeRules in metadata
         data.metadata.activeRules = rules;
 
         // Write back
-        const encoded = new TextEncoder().encode(JSON.stringify(data, null, 2));
+        const encoded = encodeAgentContext(data);
         await vscode.workspace.fs.writeFile(fileUri, encoded);
 
         res.json({
@@ -137,6 +137,10 @@ export async function handleSetRules(req: Request, res: Response): Promise<void>
         });
     } catch (error: any) {
         console.error('Failed to set rules:', error);
+        if (isMtmFormatError(error)) {
+            res.status(422).json({ status: 'error', code: error.code, content: error.message });
+            return;
+        }
         res.status(500).json({ status: 'error', content: `Failed to set rules: ${error.message}` });
     }
 }

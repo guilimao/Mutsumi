@@ -11,6 +11,7 @@ import {
     registerToggleAutoApproveCommands,
     registerTestRagSearchCommand,
     registerCompressConversationCommand,
+    registerManageProvidersCommand,
     registerPruneGhostBlocksCommand
 } from './commands';
 
@@ -25,5 +26,6 @@ export function registerToolbarCommands(context: vscode.ExtensionContext): void 
     registerToggleAutoApproveCommands(context);
     registerTestRagSearchCommand(context);
     registerCompressConversationCommand(context);
+    registerManageProvidersCommand(context);
     registerPruneGhostBlocksCommand(context);
 }

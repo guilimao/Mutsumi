@@ -6,14 +6,16 @@ import { RenderData, RenderBlock, MUTSUMI_AGENT_CHAT_MIME } from '../notebook/re
 import { ToolSet, ToolRegistry, createToolSetForAgent } from '../tools.d/toolManager';
 import { getAgentFromRegistry } from './utils';
 import { AgentFileOperations } from '../agent/fileOps';
-import { getModelCredentials, getDefaultModelSelection, resolveModelSelection } from '../utils';
+import { getDefaultModelSelection, resolveModelSelection } from '../utils';
 import {
     normalizeReasoningEffort,
     REASONING_EFFORT_SETTING_VALUES
 } from '../agent/types';
 import type { HeadlessAdapter } from '../adapters/headlessAdapter';
 import type { AgentSessionConfig } from '../adapters/interfaces';
-import type { AgentMessage, AgentMetadata, ModelSelection } from '../types';
+import type { AgentMetadata, ModelSelection } from '../types';
+import { buildInteractionHistory } from '../contextManagement/history';
+import { isMtmFormatError } from '../mtmFormat';
 
 export async function handleChat(
     req: express.Request,
@@ -68,7 +70,16 @@ export async function handleChat(
 
     const serializer = new MutsumiSerializer();
     const tokenSource = new vscode.CancellationTokenSource();
-    const notebookData = await serializer.deserializeNotebook(content, tokenSource.token);
+    let notebookData: vscode.NotebookData;
+    try {
+        notebookData = await serializer.deserializeNotebook(content, tokenSource.token);
+    } catch (error) {
+        if (isMtmFormatError(error)) {
+            res.status(422).json({ status: 'error', code: error.code, content: error.message });
+            return;
+        }
+        throw error;
+    }
 
     // Get VS Code configuration
     const config = vscode.workspace.getConfiguration('mutsumi');
@@ -94,7 +105,7 @@ export async function handleChat(
         if (hasModel && hasProvider) {
             effectiveSelection = resolveModelSelection({ model, provider });
         } else {
-            // Use persisted pair. Missing model → global default; model without provider → migration error.
+            // Use persisted pair. Missing model → global default; model without provider is invalid.
             if (!metadataModel) {
                 effectiveSelection = getDefaultModelSelection();
             } else if (!metadataProvider) {
@@ -111,17 +122,6 @@ export async function handleChat(
         return;
     }
 
-    // Get credentials for the resolved pair.
-    let credentials: { apiKey: string; baseUrl: string };
-    try {
-        credentials = getModelCredentials(effectiveSelection.model, effectiveSelection.provider);
-    } catch (err: any) {
-        res.status(400).json({ status: 'error', content: err.message });
-        return;
-    }
-    const { apiKey, baseUrl } = credentials;
-    // getModelCredentials guarantees apiKey and baseUrl are non-empty
-
     const effectiveModel = effectiveSelection.model;
     const effectiveProvider = effectiveSelection.provider;
     const reasoningEffort = normalizeReasoningEffort(
@@ -134,6 +134,10 @@ export async function handleChat(
         try {
             await AgentFileOperations.updateAgentModelSelection(fileUri, effectiveSelection);
         } catch (err: any) {
+            if (isMtmFormatError(err)) {
+                res.status(422).json({ status: 'error', code: err.code, content: err.message });
+                return;
+            }
             res.status(400).json({ status: 'error', content: err.message });
             return;
         }
@@ -178,8 +182,6 @@ export async function handleChat(
     // Create session config
     const sessionConfig: AgentSessionConfig = {
         model: effectiveModel,
-        apiKey,
-        baseUrl,
         maxLoops,
         allowedUris,
         isSubAgent,
@@ -207,37 +209,17 @@ export async function handleChat(
     // Set the input prompt
     (session as any).setInput(prompt);
 
-    // Append user message to history
-    const userMessage: AgentMessage = { role: 'user', content: prompt };
+    const baseHistory = await session.getHistory();
+    const runHistory = await buildInteractionHistory(session, prompt, baseHistory);
 
-    // Get existing history and append new user message
-    const history = await session.getHistory();
-    history.push(userMessage);
-
-    // Serialize updated history back to file (persist user message)
-    const userCell = new vscode.NotebookCellData(
-        vscode.NotebookCellKind.Code,
-        prompt,
-        'markdown'
-    );
-    userCell.metadata = { role: 'user' };
-    const notebookDataWithUser = new vscode.NotebookData([
-        ...notebookData.cells,
-        userCell
-    ]);
-    notebookData.metadata = updatedMetadata;
-    notebookDataWithUser.metadata = updatedMetadata;
-    const encoded = await serializer.serializeNotebook(notebookDataWithUser, tokenSource.token);
-    await vscode.workspace.fs.writeFile(fileUri, encoded);
-
-    // Update session history
-    (session as any).setHistory(history);
+    // Persist the pending turn before the potentially long-running provider call.
+    session.setHistory(runHistory.persistedMessages);
+    await session.save();
 
     // Create AgentRunner options
     const runnerOptions = {
         model: effectiveModel,
-        apiKey,
-        baseUrl,
+        provider: effectiveProvider,
         maxLoops,
         reasoningEffort
     };
@@ -292,23 +274,32 @@ export async function handleChat(
         // Run the agent and stream results
         try {
             const runner = new AgentRunner(runnerOptions, toolSet, session);
-            const newMessages = await runner.run(abortController, history);
+            const runResult = await runner.run(abortController, {
+                systemPrompt: runHistory.systemPrompt,
+                messages: runHistory.messages,
+            });
 
-            // Update session with new history
-            const updatedHistory = [...history, ...newMessages];
-            (session as any).setHistory(updatedHistory);
+            // Persist the unanswered user turn and any fully completed native rounds.
+            const updatedHistory = [...runHistory.persistedMessages, ...runResult.messages];
+            session.setHistory(updatedHistory);
+            await session.save();
 
             isFinished = true;
 
-            // Send final event
-            const finalEvent = {
-                type: 'done',
-                messageCount: newMessages.length
-            };
+            const finalEvent = runResult.status === 'failed'
+                ? {
+                    type: 'error',
+                    code: runResult.error?.code ?? 'AGENT_RUN_FAILED',
+                    error: runResult.error?.message ?? 'Agent execution failed',
+                    messageCount: runResult.messages.length,
+                }
+                : runResult.status === 'cancelled'
+                    ? { type: 'cancelled', messageCount: runResult.messages.length }
+                    : { type: 'done', messageCount: runResult.messages.length };
             res.write(`data: ${JSON.stringify(finalEvent)}\n\n`);
             res.end();
 
-            console.log(`[Mutsumi] Agent ${uuid} streaming completed with ${newMessages.length} new messages`);
+            console.log(`[Mutsumi] Agent ${uuid} streaming ${runResult.status} with ${runResult.messages.length} new messages`);
         } catch (error: any) {
             console.error(`[Mutsumi] Agent ${uuid} streaming error:`, error);
             isFinished = true;
@@ -321,14 +312,7 @@ export async function handleChat(
             res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
             res.end();
 
-            // Append error as assistant message
-            const errorMessage: AgentMessage = {
-                role: 'assistant',
-                content: `> ⚠️ **Error**: ${error.message || String(error)}\n\n*Execution failed.*`
-            };
-            const errorHistory = [...history, errorMessage];
-            (session as any).setHistory(errorHistory);
-            await session.save();
+            // Incomplete/error assistant messages are never synthesized or persisted.
         } finally {
             abortControllers.delete(uuid);
             // Restore original method
@@ -339,26 +323,25 @@ export async function handleChat(
         void (async () => {
             try {
                 const runner = new AgentRunner(runnerOptions, toolSet, session!);
-                const newMessages = await runner.run(abortController, history);
+                const runResult = await runner.run(abortController, {
+                    systemPrompt: runHistory.systemPrompt,
+                    messages: runHistory.messages,
+                });
 
-                // Update session with new history
-                const updatedHistory = [...history, ...newMessages];
-                (session as any).setHistory(updatedHistory);
+                // Persist only fully completed native messages, regardless of final run status.
+                const updatedHistory = [...runHistory.persistedMessages, ...runResult.messages];
+                session.setHistory(updatedHistory);
+                await session.save();
 
-                console.log(`[Mutsumi] Agent ${uuid} completed with ${newMessages.length} new messages`);
+                if (runResult.status === 'failed') {
+                    console.error(`[Mutsumi] Agent ${uuid} failed: ${runResult.error?.message ?? 'Unknown error'}`);
+                } else {
+                    console.log(`[Mutsumi] Agent ${uuid} ${runResult.status} with ${runResult.messages.length} new messages`);
+                }
             } catch (error: any) {
                 console.error(`[Mutsumi] Agent ${uuid} error:`, error);
 
-                // Append error as assistant message
-                const errorMessage: AgentMessage = {
-                    role: 'assistant',
-                    content: `> ⚠️ **Error**: ${error.message || String(error)}\n\n*Execution failed.*`
-                };
-                const errorHistory = [...history, errorMessage];
-                (session as any).setHistory(errorHistory);
-
-                // Persist error to file
-                await session!.save();
+                // Incomplete/error assistant messages are never synthesized or persisted.
             } finally {
                 abortControllers.delete(uuid);
             }

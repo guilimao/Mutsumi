@@ -3,18 +3,14 @@
  * @module types
  */
 
-/**
- * Provider configuration using snake_case for settings schema alignment.
- * @interface Provider
- */
-export interface Provider {
-    /** Provider name identifier */
-    name: string;
-    /** Base URL for the provider's API */
-    baseurl: string;
-    /** API key for the provider */
-    api_key: string;
-}
+import type {
+    AssistantMessage,
+    ImageContent,
+    TextContent,
+    ToolResultMessage,
+    UserMessage,
+} from '@earendil-works/pi-ai';
+import type { GhostBlock } from './contextManagement/interfaces';
 
 /**
  * Explicit model + provider pair. Used throughout settings, configuration,
@@ -29,27 +25,11 @@ export interface ModelSelection {
 }
 
 /**
- * Default providers used when user hasn't configured any providers.
- */
-export const DEFAULT_PROVIDERS: Provider[] = [
-    { name: "kimi-for-coding", baseurl: "https://api.kimi.com/coding/v1", api_key: "" }
-];
-
-/**
- * Default models configuration used when user hasn't configured any models.
- * Keys are provider names, values are arrays of model identifiers supported
- * by that provider.
- */
-export const DEFAULT_MODELS: Record<string, string[]> = {
-    "kimi-for-coding": ["kimi-for-coding"]
-};
-
-/**
  * Built-in default model selection pair.
  */
 export const DEFAULT_MODEL_SELECTION: ModelSelection = {
     model: "kimi-for-coding",
-    provider: "kimi-for-coding"
+    provider: "kimi-coding"
 };
 
 /**
@@ -99,55 +79,128 @@ export interface AgentMetadata {
  * Text content part for multimodal messages.
  * @interface ContentPartText
  */
-export type ContentPartText = { type: 'text'; text: string };
+export type ContentPartText = TextContent;
 
 /**
  * Image content part for multimodal messages.
  * @interface ContentPartImage
  */
-export type ContentPartImage = { 
-    type: 'image_url'; 
-    image_url: { 
-        url: string; 
-        detail?: 'auto' | 'low' | 'high' 
-    } 
-};
+export type ContentPartImage = ImageContent;
 
 /**
  * Message content can be plain text or multimodal parts.
  */
-export type MessageContent = string | (ContentPartText | ContentPartImage)[];
+export type MessageContent = UserMessage['content'];
+
+/** Mutsumi-only state attached to persisted user messages. */
+export interface MutsumiUserMessageState {
+    ghostBlock?: GhostBlock;
+}
 
 /**
  * Message in an agent conversation.
  * @interface AgentMessage
  */
-export interface AgentMessage {
-    /** Role of the message sender */
-    role: 'user' | 'assistant' | 'system' | 'tool';
-    /** Message content, null if only tool calls */
-    content: MessageContent | null;
-    /** Tool calls requested by assistant */
-    tool_calls?: any[];
-    /** ID of the tool call this message responds to */
-    tool_call_id?: string;
-    /** Name of the tool being called */
-    name?: string;
-    /** Reasoning/thinking content from the model */
-    reasoning_content?: string;
-    /** Additional metadata for the message (e.g. ghost block state) */
-    metadata?: any;
+export type AgentMessage =
+    | (UserMessage & { mutsumi?: MutsumiUserMessageState })
+    | AssistantMessage
+    | ToolResultMessage;
+
+export type PersistedTextContent = {
+    type: 'text';
+    text: string;
+    textSignature?: unknown;
+};
+
+export type PersistedImageContent = {
+    type: 'image';
+    data: string;
+    mimeType: string;
+};
+
+export type PersistedThinkingContent = {
+    type: 'thinking';
+    thinking: string;
+    thinkingSignature?: unknown;
+    redacted?: unknown;
+};
+
+export type PersistedToolCall = {
+    type: 'toolCall';
+    id: string;
+    name: string;
+    arguments: Record<string, unknown>;
+    thoughtSignature?: unknown;
+};
+
+/**
+ * On-disk messages keep the pi-ai semantic core strict while allowing provider
+ * envelope metadata to evolve independently of the .mtm format.
+ */
+export type PersistedUserMessage = {
+    role: 'user';
+    content: string | (PersistedTextContent | PersistedImageContent)[];
+    timestamp?: unknown;
+    mutsumi?: MutsumiUserMessageState;
+};
+
+export type PersistedAssistantMessage = {
+    role: 'assistant';
+    content: (PersistedTextContent | PersistedThinkingContent | PersistedToolCall)[];
+    api: string;
+    provider: string;
+    model: string;
+    usage?: unknown;
+    cost?: unknown;
+    timestamp?: unknown;
+    stopReason?: unknown;
+    responseId?: unknown;
+    responseModel?: unknown;
+    errorMessage?: unknown;
+    diagnostics?: unknown;
+};
+
+export type PersistedToolResultMessage = {
+    role: 'toolResult';
+    toolCallId: string;
+    toolName: string;
+    content: (PersistedTextContent | PersistedImageContent)[];
+    isError: boolean;
+    timestamp?: unknown;
+    usage?: unknown;
+    details?: unknown;
+    addedToolNames?: unknown;
+};
+
+export type PersistedAgentMessage =
+    | PersistedUserMessage
+    | PersistedAssistantMessage
+    | PersistedToolResultMessage;
+
+/** A user-authored Markup cell that is persisted but never sent to a model. */
+export interface NotebookNote {
+    /** Number of user cells that precede this note. */
+    beforeUserIndex: number;
+    /** Original Markdown source. */
+    markdown: string;
 }
+
+/** Current, deliberately strict on-disk .mtm format version. */
+export const MTM_FORMAT_VERSION = 1 as const;
 
 /**
  * Complete agent context including metadata and conversation history.
  * @interface AgentContext
  */
 export interface AgentContext {
+    /** Required on-disk format discriminator. Unversioned files are unsupported. */
+    formatVersion: typeof MTM_FORMAT_VERSION;
     /** Agent metadata */
     metadata: AgentMetadata;
     /** Conversation message history */
-    context: AgentMessage[];
+    context: PersistedAgentMessage[];
+    /** User-authored Markup cells, anchored between user cells. */
+    notes?: NotebookNote[];
 }
 
 /**

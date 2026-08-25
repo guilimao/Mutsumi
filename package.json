@@ -119,6 +119,12 @@
                 "icon": "$(server-environment)"
             },
             {
+                "command": "mutsumi.manageProviders",
+                "title": "%command.manageProviders.title%",
+                "category": "Mutsumi",
+                "icon": "$(key)"
+            },
+            {
                 "command": "mutsumi.renameSession",
                 "title": "%command.renameSession.title%",
                 "category": "Mutsumi",
@@ -398,42 +404,47 @@
         "configuration": {
             "title": "%configuration.title%",
             "properties": {
-                "mutsumi.providers": {
-                    "type": "array",
-                    "markdownDescription": "%configuration.providers.markdownDescription%",
-                    "items": {
+                "mutsumi.customProviders": {
+                    "type": "object",
+                    "markdownDescription": "%configuration.customProviders.markdownDescription%",
+                    "default": {},
+                    "additionalProperties": {
                         "type": "object",
                         "properties": {
-                            "name": {
-                                "type": "string",
-                                "markdownDescription": "%configuration.providers.items.name.markdownDescription%"
+                            "displayName": {
+                                "type": "string"
                             },
-                            "baseurl": {
+                            "baseUrl": {
                                 "type": "string",
-                                "markdownDescription": "%configuration.providers.items.baseurl.markdownDescription%"
+                                "format": "uri"
                             },
-                            "api_key": {
+                            "api": {
                                 "type": "string",
-                                "default": "",
-                                "markdownDescription": "%configuration.providers.items.api_key.markdownDescription%"
+                                "enum": [
+                                    "openai-completions",
+                                    "openai-responses"
+                                ],
+                                "default": "openai-completions"
+                            },
+                            "auth": {
+                                "type": "string",
+                                "enum": [
+                                    "apiKey",
+                                    "none"
+                                ],
+                                "default": "apiKey"
+                            },
+                            "models": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "default": []
                             }
                         },
                         "required": [
-                            "name",
-                            "baseurl",
-                            "api_key"
+                            "baseUrl"
                         ]
-                    },
-                    "default": []
-                },
-                "mutsumi.models": {
-                    "type": "object",
-                    "markdownDescription": "%configuration.models.markdownDescription%",
-                    "additionalProperties": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
                     }
                 },
                 "mutsumi.defaultModel": {
@@ -453,7 +464,7 @@
                     ],
                     "default": {
                         "model": "kimi-for-coding",
-                        "provider": "kimi-for-coding"
+                        "provider": "kimi-coding"
                     }
                 },
                 "mutsumi.titleGeneratorModel": {
@@ -535,24 +546,66 @@
                             {
                                 "type": "object",
                                 "properties": {
-                                    "type": { "const": "stdio" },
-                                    "command": { "type": "string", "minLength": 1 },
-                                    "args": { "type": "array", "items": { "type": "string" } },
-                                    "cwd": { "type": "string" },
-                                    "env": { "type": "object", "additionalProperties": { "type": ["string", "number"] } },
-                                    "timeout": { "type": "number", "exclusiveMinimum": 0 }
+                                    "type": {
+                                        "const": "stdio"
+                                    },
+                                    "command": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    },
+                                    "args": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "cwd": {
+                                        "type": "string"
+                                    },
+                                    "env": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                            "type": [
+                                                "string",
+                                                "number"
+                                            ]
+                                        }
+                                    },
+                                    "timeout": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                    }
                                 },
-                                "required": ["type", "command"]
+                                "required": [
+                                    "type",
+                                    "command"
+                                ]
                             },
                             {
                                 "type": "object",
                                 "properties": {
-                                    "type": { "const": "http" },
-                                    "url": { "type": "string", "format": "uri" },
-                                    "headers": { "type": "object", "additionalProperties": { "type": "string" } },
-                                    "timeout": { "type": "number", "exclusiveMinimum": 0 }
+                                    "type": {
+                                        "const": "http"
+                                    },
+                                    "url": {
+                                        "type": "string",
+                                        "format": "uri"
+                                    },
+                                    "headers": {
+                                        "type": "object",
+                                        "additionalProperties": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "timeout": {
+                                        "type": "number",
+                                        "exclusiveMinimum": 0
+                                    }
                                 },
-                                "required": ["type", "url"]
+                                "required": [
+                                    "type",
+                                    "url"
+                                ]
                             }
                         ]
                     }
@@ -635,9 +688,10 @@
         }
     },
     "scripts": {
+		"test": "vitest run",
         "vscode:prepublish": "npm run package",
         "compile": "npm run check-types && node esbuild.js",
-        "check-types": "npx tsc --noEmit && npx tsc --noEmit -p tsconfig.renderer.json",
+        "check-types": "npx tsc --noEmit && npx tsc --noEmit -p tsconfig.renderer.json && npx tsc --noEmit -p tests/tsconfig.json",
         "watch": "npm-run-all -p watch:*",
         "watch:esbuild": "node esbuild.js --watch",
         "watch:tsc": "npx tsc --noEmit --watch",
@@ -645,11 +699,13 @@
         "package-local": "vsce package && npm install"
     },
     "devDependencies": {
+        "@earendil-works/pi-ai": "^0.82.1",
         "@electron/rebuild": "^4.0.3",
+        "@modelcontextprotocol/sdk": "^1.30.0",
         "@types/better-sqlite3": "^7.6.13",
         "@types/diff": "^8.0.0",
         "@types/express": "^5.0.6",
-        "@types/node": "^18.0.0",
+        "@types/node": "^22.0.0",
         "@types/node-notifier": "^8.0.5",
         "@types/uuid": "^9.0.8",
         "@types/vscode": "^1.108.1",
@@ -665,13 +721,12 @@
         "lowlight": "^3.3.0",
         "micromark": "^4.0.0",
         "micromark-extension-gfm": "^2.0.0",
-        "@modelcontextprotocol/sdk": "^1.30.0",
         "npm-run-all": "^4.1.5",
-        "openai": "^6.17.0",
         "partial-json": "^0.1.7",
         "preprocess": "^3.2.0",
         "typescript": "^5.9.3",
-        "uuid": "^9.0.1"
+        "uuid": "^9.0.1",
+        "vitest": "^3.2.7"
     },
     "dependencies": {
         "better-sqlite3": "^12.8.0",

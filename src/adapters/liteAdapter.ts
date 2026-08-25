@@ -6,7 +6,7 @@ import {
     AgentSessionConfig,
     CreateSessionOptions
 } from './interfaces';
-import { AgentMessage, ContextItem } from '../types';
+import { ContextItem, PersistedAgentMessage } from '../types';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
 
@@ -16,7 +16,7 @@ import { isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
  */
 export interface LiteAgentSessionConfig extends AgentSessionConfig {
     input?: string;
-    history?: AgentMessage[];
+    history?: PersistedAgentMessage[];
 }
 
 export class LiteAdapter implements IAgentAdapter {
@@ -42,7 +42,7 @@ export class LiteAgentSession implements IAgentSession {
     private readonly tokenSource = new vscode.CancellationTokenSource();
     private config: LiteAgentSessionConfig;
     private inputPrompt = '';
-    private history: AgentMessage[] = [];
+    private history: PersistedAgentMessage[] = [];
     private outputBuffer = '';
     private ghostBlocks: (GhostBlock | null)[] = [];
 
@@ -58,8 +58,8 @@ export class LiteAgentSession implements IAgentSession {
         return this.inputPrompt;
     }
 
-    async getHistory(): Promise<AgentMessage[]> {
-        return this.history;
+    async getHistory(): Promise<PersistedAgentMessage[]> {
+        return [...this.history];
     }
 
     async appendOutput(content: string, _options?: { isMarkdown?: boolean; mimeType?: string }): Promise<void> {
@@ -98,7 +98,7 @@ export class LiteAgentSession implements IAgentSession {
         }
     }
 
-    setHistory(messages: AgentMessage[]): void {
+    setHistory(messages: PersistedAgentMessage[]): void {
         this.history = messages;
     }
 

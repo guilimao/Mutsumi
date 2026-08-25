@@ -4,6 +4,7 @@
  */
 
 import type { AgentStateInfo, AgentRuntimeStatus } from '../types';
+import type { AgentMessage } from '../types';
 
 // Re-export imported types
 export type { AgentStateInfo, AgentRuntimeStatus };
@@ -48,10 +49,8 @@ export function normalizeReasoningEffort(value: string | undefined | null): stri
 export interface AgentRunOptions {
     /** Model identifier to use for LLM calls */
     model: string;
-    /** OpenAI API key */
-    apiKey: string;
-    /** Base URL for OpenAI-compatible API */
-    baseUrl: string | undefined;
+    /** Provider route serving the selected model */
+    provider: string;
     /** Maximum number of tool interaction loops */
     maxLoops?: number;
     /** Reasoning effort resolved and injected by the caller; the runner does not read global configuration */
@@ -75,4 +74,24 @@ export interface DispatchSession {
     results: Map<string, string>;
     /** Set of child agent UUIDs that have been deleted */
     deletedChildren: Set<string>;
+}
+
+/** Provider-ready conversation state; system instructions are not persisted as messages. */
+export interface AgentRunContext {
+    systemPrompt?: string;
+    messages: AgentMessage[];
+}
+
+export type AgentRunStatus = 'completed' | 'failed' | 'cancelled';
+
+export interface AgentRunFailure {
+    code: string;
+    message: string;
+}
+
+/** Outcome of one run. Only native messages in this result may be persisted. */
+export interface AgentRunResult {
+    messages: AgentMessage[];
+    status: AgentRunStatus;
+    error?: AgentRunFailure;
 }

@@ -11,8 +11,9 @@ import { createEmptyToolSet } from '../../tools.d/toolManager';
 import type { AgentRunOptions } from '../../agent/types';
 import { MutsumiSerializer } from '../serializer';
 import { formatMessagesToString, createDebugSessionFromNotebook } from './utils';
-import { getCompressModelSelection, getModelCredentials, resolveModelSelection } from '../../utils';
+import { getCompressModelSelection, resolveModelSelection } from '../../utils';
 import { t } from '../../i18n';
+import { assistantText } from '../../llm/messageText';
 
 /**
  * Register the compress conversation command.
@@ -76,15 +77,6 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                 const compressModel = compressSelection.model;
                 const compressProvider = compressSelection.provider;
 
-                let credentials: { apiKey: string; baseUrl: string };
-                try {
-                    credentials = getModelCredentials(compressModel, compressProvider);
-                } catch (err: any) {
-                    vscode.window.showErrorMessage(t('compress.failed', err.message));
-                    return;
-                }
-                const { apiKey, baseUrl } = credentials;
-
                 // Build session and get full interaction history
                 const session = await createDebugSessionFromNotebook(editor.notebook, lastCodeCellIndex);
                 const { messages } = await buildInteractionHistory(session);
@@ -107,10 +99,8 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                     const conversationText = formatMessagesToString(messages, { includeHeader: false, maxContentLength: 3000 });
 
                     // Create compression prompt messages
-                    const compressionMessages: AgentMessage[] = [
-                        {
-                            role: 'system',
-                            content: 'You are a conversation compression assistant. Your task is to compress a long conversation into a concise summary while preserving all important information, decisions, and context.\n\n' +
+                    const compressionContext = {
+                        systemPrompt: 'You are a conversation compression assistant. Your task is to compress a long conversation into a concise summary while preserving all important information, decisions, and context.\n\n' +
                                 'Requirements:\n' +
                                 '1. Summarize the main topics and goals discussed\n' +
                                 '2. Preserve all key decisions and conclusions\n' +
@@ -118,20 +108,18 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                                 '4. Maintain the chronological flow of the conversation\n' +
                                 '5. Keep the summary concise but comprehensive\n' +
                                 '6. Use markdown formatting for clarity\n' +
-                                '7. Do not include meta-commentary about the compression process'
-                        },
-                        {
+                                '7. Do not include meta-commentary about the compression process',
+                        messages: [{
                             role: 'user',
-                            content: `Please compress the following conversation into a concise summary:\n\n${conversationText}`
-                        }
-                    ];
+                            content: `Please compress the following conversation into a concise summary:\n\n${conversationText}`,
+                            timestamp: Date.now(),
+                        } satisfies AgentMessage],
+                    };
 
                     // Create lite adapter and session for compression
                     const adapter = new LiteAdapter();
                     const compressConfig: LiteAgentSessionConfig = {
                         model: compressModel,
-                        apiKey,
-                        baseUrl,
                         metadata: editor.notebook.metadata 
                             ? JSON.parse(JSON.stringify(editor.notebook.metadata)) as AgentMetadata 
                             : undefined
@@ -146,25 +134,24 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                     // Create agent runner
                     const runOptions: AgentRunOptions = {
                         model: compressModel,
-                        apiKey,
-                        baseUrl,
+                        provider: compressProvider,
                         maxLoops: 1 // Single round since no tools
                     };
                     const runner = new AgentRunner(runOptions, emptyToolSet, compressSession);
 
                     // Run compression
                     const abortController = new AbortController();
-                    const compressedMessages = await runner.run(abortController, compressionMessages);
-
-                    // Extract compressed content
-                    const lastAssistantMsg = [...compressedMessages].reverse().find(m => m.role === 'assistant');
-                    if (!lastAssistantMsg?.content) {
-                        throw new Error('Compression failed: no response from LLM');
+                    const runResult = await runner.run(abortController, compressionContext);
+                    if (runResult.status !== 'completed') {
+                        throw new Error(runResult.error?.message ?? 'Compression was cancelled');
                     }
 
-                    const compressedContent = typeof lastAssistantMsg.content === 'string' 
-                        ? lastAssistantMsg.content 
-                        : JSON.stringify(lastAssistantMsg.content);
+                    // Extract compressed content
+                    const lastAssistantMsg = [...runResult.messages].reverse().find(m => m.role === 'assistant');
+                    if (!lastAssistantMsg) {
+                        throw new Error('Compression failed: no response from LLM');
+                    }
+                    const compressedContent = assistantText(lastAssistantMsg);
 
                     // Generate new file name
                     const originalUri = editor.notebook.uri;
@@ -193,7 +180,8 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                     // Create single user message with compressed content
                     const compressedContext: AgentMessage[] = [{
                         role: 'user',
-                        content: `## Conversation Summary\n\n${compressedContent}\n\n---\n\n*This is a compressed version of the original conversation. Original file: ${originalName}*`
+                        content: `## Conversation Summary\n\n${compressedContent}\n\n---\n\n*This is a compressed version of the original conversation. Original file: ${originalName}*`,
+                        timestamp: Date.now(),
                     }];
 
                     // Create notebook data using serializer
@@ -205,6 +193,7 @@ export function registerCompressConversationCommand(context: vscode.ExtensionCon
                             'markdown'
                         )
                     ]);
+                    notebookData.cells[0].metadata = { role: 'user', timestamp: compressedContext[0].timestamp };
                     notebookData.metadata = compressedMetadata;
 
                     // Serialize and save

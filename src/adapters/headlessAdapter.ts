@@ -3,8 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { MutsumiSerializer } from '../notebook/serializer';
 import {
     messagesToGenericCells,
-    genericCellsToMessages,
-    extractGhostBlocksFromCells
+    extractGhostBlocksFromCells,
+    extractNotebookNotes,
 } from '../notebook/serializer';
 import {
     IAgentAdapter,
@@ -12,9 +12,10 @@ import {
     AgentSessionConfig,
     CreateSessionOptions
 } from './interfaces';
-import type { AgentMessage, AgentMetadata, AgentContext, ContextItem } from '../types';
+import type { AgentMetadata, ContextItem, PersistedAgentMessage } from '../types';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
+import { decodeAgentContext, encodeAgentContext } from '../mtmFormat';
 
 /**
  * Reads a reasoning effort override directly from an agent file.
@@ -23,7 +24,7 @@ import { isEmptyGhostBlock } from '../contextManagement/ghostBlocks';
  */
 export async function readReasoningEffortFromFile(fileUri: vscode.Uri): Promise<string | undefined> {
     const content = await vscode.workspace.fs.readFile(fileUri);
-    const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
+    const data = decodeAgentContext(content);
     return data.metadata?.reasoning_effort;
 }
 
@@ -37,7 +38,7 @@ export async function writeReasoningEffortToFile(
     effort: string | undefined
 ): Promise<void> {
     const content = await vscode.workspace.fs.readFile(fileUri);
-    const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
+    const data = decodeAgentContext(content);
 
     if (effort === undefined || effort === 'default') {
         delete data.metadata.reasoning_effort;
@@ -45,7 +46,7 @@ export async function writeReasoningEffortToFile(
         data.metadata.reasoning_effort = effort;
     }
 
-    const encoded = new TextEncoder().encode(JSON.stringify(data, null, 2));
+    const encoded = encodeAgentContext(data);
     await vscode.workspace.fs.writeFile(fileUri, encoded);
 }
 
@@ -101,8 +102,9 @@ export class HeadlessAgentSession implements IAgentSession {
     private readonly tokenSource = new vscode.CancellationTokenSource();
     private readonly resourceUri?: vscode.Uri;
     private config: AgentSessionConfig;
-    private history: AgentMessage[] = [];  // Raw (unexpanded) history from file
-    private fullHistory: AgentMessage[] | undefined;  // Full expanded history from setHistory
+    private history: PersistedAgentMessage[] = [];
+    private historyLoaded = false;
+    private fullHistory: PersistedAgentMessage[] | undefined;
     private inputPrompt = '';
     private outputBuffer = '';
     private pendingGhostBlock?: GhostBlock | null;  // Ghost block for current message (applied on save)
@@ -125,14 +127,12 @@ export class HeadlessAgentSession implements IAgentSession {
         this.inputPrompt = prompt;
     }
 
-    async getHistory(): Promise<AgentMessage[]> {
-        if (this.resourceUri && this.history.length === 0) {
-            try {
+    async getHistory(): Promise<PersistedAgentMessage[]> {
+        if (this.resourceUri && !this.historyLoaded) {
                 const content = await vscode.workspace.fs.readFile(this.resourceUri);
-                const data = JSON.parse(new TextDecoder().decode(content)) as AgentContext;
-                if (Array.isArray(data.context)) {
-                    this.history = data.context;
-                }
+                const data = decodeAgentContext(content);
+                this.history = data.context;
+                this.historyLoaded = true;
                 if (data.metadata) {
                     if (data.metadata.model && !this.config.model) {
                         this.config.model = data.metadata.model;
@@ -153,16 +153,14 @@ export class HeadlessAgentSession implements IAgentSession {
                         this.config.metadata.provider = data.metadata.provider;
                     }
                 }
-            } catch {
-                // Ignore, return cached history
-            }
         }
-        return this.history;
+        return [...this.history];
     }
 
-    setHistory(history: AgentMessage[]): void {
-        // Store the full expanded history
+    setHistory(history: PersistedAgentMessage[]): void {
         this.fullHistory = history;
+        this.history = history;
+        this.historyLoaded = true;
     }
 
     async appendOutput(content: string, _options?: { isMarkdown?: boolean; mimeType?: string }): Promise<void> {
@@ -182,14 +180,14 @@ export class HeadlessAgentSession implements IAgentSession {
 
         const serializer = new MutsumiSerializer();
         const tokenSource = new vscode.CancellationTokenSource();
-        let notebookData: vscode.NotebookData | undefined;
-
-        try {
-            const raw = await vscode.workspace.fs.readFile(this.resourceUri);
-            notebookData = await serializer.deserializeNotebook(raw, tokenSource.token);
-        } catch {
-            notebookData = new vscode.NotebookData([]);
-        }
+        const raw = await vscode.workspace.fs.readFile(this.resourceUri);
+        const notebookData = await serializer.deserializeNotebook(raw, tokenSource.token);
+        const existingGenericCells = notebookData.cells.map(cell => ({
+            kind: cell.kind === vscode.NotebookCellKind.Code ? 2 as const : 1 as const,
+            value: cell.value,
+            metadata: cell.metadata,
+        }));
+        const notes = extractNotebookNotes(existingGenericCells);
 
         if (!notebookData.metadata) {
             notebookData.metadata = {
@@ -203,7 +201,7 @@ export class HeadlessAgentSession implements IAgentSession {
 
         // Use generic cell conversion for consistent behavior
         const sourceHistory = this.fullHistory || this.history;
-        const genericCells = messagesToGenericCells(sourceHistory);
+        const genericCells = messagesToGenericCells(sourceHistory, notes);
 
         // Apply the current ghost block to the last user cell if exists
         if (this.pendingGhostBlock !== undefined && genericCells.length > 0) {

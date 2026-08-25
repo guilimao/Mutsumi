@@ -9,6 +9,7 @@ import { MutsumiSerializer } from '../notebook/serializer';
 import { resolveAgentDefaults, validateEntryAgentType } from '../config/resolver';
 import type { AgentContext, AgentMetadata } from '../types';
 import { McpRegistry } from '../mcp/registry';
+import { decodeAgentContext } from '../mtmFormat';
 
 export interface CreateAgentDependencies {
     extensionUri: vscode.Uri;
@@ -99,7 +100,7 @@ export function createCreateAgentHandler(
 
             // Register the agent in the registry
             // Parse metadata from the generated content to ensure consistency
-            const agentContext = JSON.parse(new TextDecoder().decode(initialContent)) as AgentContext;
+            const agentContext = decodeAgentContext(initialContent);
             await AgentOrchestrator.getInstance().notifyNotebookDocumentOpened(uuid, newFileUri, agentContext.metadata);
 
             res.status(201).json({
