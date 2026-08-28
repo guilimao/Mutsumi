@@ -162,21 +162,3 @@ export interface IAgentSession {
      */
     updateContextItems?(items: ContextItem[]): Promise<void>;
 }
-
-/**
- * Cell-level metadata for notebook-style adapters.
- * Used to persist per-cell state like ghost blocks.
- */
-export interface CellMetadata {
-    /**
-     * Persisted structured ghost block from this cell's context.
-     * Raw notebook metadata is untrusted and must be decoded before use.
-     */
-    last_ghost_block?: GhostBlock;
-    /** Message role (user/assistant) */
-    role?: string;
-    /** Assistant/tool interaction rendered as output of a user cell */
-    mutsumi_interaction?: PersistedAgentMessage[];
-    /** Other arbitrary metadata */
-    [key: string]: any;
-}

@@ -29,14 +29,11 @@ import { queryCodebaseTool } from "./tools/rag";
 import { AgentTypeRegistry } from "../registry/agentTypeRegistry";
 import { ToolSetRegistry } from "../registry/toolSetRegistry";
 import * as vscode from "vscode";
-import { getCachedResult, setCachedResult } from "./cache";
+import { executeWithToolCache } from "./cache";
 import { McpRegistry } from "../mcp/registry";
 import { McpToolAdapter } from "../mcp/tool";
 import type { McpToolSelection } from "../mcp/interfaces";
 import { normalizeMcpToolSelections } from "../mcp/utils";
-
-// Re-export cache functions for convenience
-export { getToolCacheSize, clearToolCache } from "./cache";
 
 /**
  * Tool set configuration for different agent types.
@@ -442,22 +439,12 @@ export class ToolManager {
 	): Promise<string> {
 		const toolSet = this.getUserToolSet(isSubAgent);
 
-		const shouldCache = toolSet.getShouldCache(name);
-
-		if (shouldCache) {
-			const cached = getCachedResult(name, args);
-			if (cached !== undefined) {
-				return cached;
-			}
-		}
-
-		const result = await toolSet.execute(name, args, context);
-
-		if (shouldCache) {
-			setCachedResult(name, args, result);
-		}
-
-		return result;
+		return executeWithToolCache(
+			name,
+			args,
+			toolSet.getShouldCache(name),
+			() => toolSet.execute(name, args, context),
+		);
 	}
 
 	/**
@@ -540,21 +527,9 @@ export interface CreateToolSetForAgentOptions {
  * persisted session snapshot; only tools that remain available in the registry
  * are added to this run.
  */
-export function createToolSetForAgent(options: CreateToolSetForAgentOptions): ToolSet;
-/** @deprecated Use the options overload. */
-export function createToolSetForAgent(agentType: string, uuid?: string, parentAgentId?: string | null): ToolSet;
 export function createToolSetForAgent(
-	optionsOrAgentType: CreateToolSetForAgentOptions | string,
-	legacyAgentId?: string,
-	legacyParentAgentId?: string | null,
+	options: CreateToolSetForAgentOptions,
 ): ToolSet {
-	const options: CreateToolSetForAgentOptions = typeof optionsOrAgentType === "string"
-		? {
-			agentType: optionsOrAgentType,
-			agentId: legacyAgentId,
-			parentAgentId: legacyParentAgentId,
-		}
-		: optionsOrAgentType;
 	const { agentType, agentId, parentAgentId, enabledMcpTools = [] } = options;
 	const agentTypeConfig =
 		AgentTypeRegistry.getInstance().getAgentType(agentType);

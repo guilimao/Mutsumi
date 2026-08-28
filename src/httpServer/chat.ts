@@ -3,7 +3,7 @@ import express = require('express');
 import { AgentRunner } from '../agent/agentRunner';
 import { MutsumiSerializer } from '../notebook/serializer';
 import { RenderData, RenderBlock, MUTSUMI_AGENT_CHAT_MIME } from '../notebook/renderTypes';
-import { ToolSet, ToolRegistry, createToolSetForAgent } from '../tools.d/toolManager';
+import { ToolSet, createToolSetForAgent } from '../tools.d/toolManager';
 import { getAgentFromRegistry } from './utils';
 import { AgentFileOperations } from '../agent/fileOps';
 import { getDefaultModelSelection, resolveModelSelection } from '../utils';

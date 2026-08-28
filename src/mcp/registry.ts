@@ -35,9 +35,6 @@ export class McpRegistry implements McpToolCaller, Disposable {
 		return [...this.records.values()].map(record => ({ ...record, tools: [...record.tools] }));
 	}
 
-	/** @deprecated Use getRecords. */
-	getServers(): readonly McpServerRecord[] { return this.getRecords(); }
-
 	getServer(serverId: string): McpServerRecord | undefined {
 		const record = this.records.get(serverId);
 		return record && { ...record, tools: [...record.tools] };

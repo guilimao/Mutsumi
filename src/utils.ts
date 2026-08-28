@@ -124,30 +124,6 @@ export function sanitizeFileName(name: string): string {
 }
 
 /**
- * Ensures a file name is unique by appending a numeric suffix if needed.
- * @description Checks against existing names and generates a unique variant
- * by adding "-1", "-2", etc. as needed.
- * @param {string} baseName - Base file name without extension
- * @param {string[]} existingNames - Array of existing file names to check against
- * @returns {string} Unique file name
- */
-export function ensureUniqueFileName(baseName: string, existingNames: string[]): string {
-    if (!existingNames.includes(baseName)) {
-        return baseName;
-    }
-
-    let counter = 1;
-    let newName = `${baseName}-${counter}`;
-
-    while (existingNames.includes(newName)) {
-        counter++;
-        newName = `${baseName}-${counter}`;
-    }
-
-    return newName;
-}
-
-/**
  * Get language identifier for Markdown code block based on file extension
  */
 export function getLanguageIdentifier(ext: string): string {

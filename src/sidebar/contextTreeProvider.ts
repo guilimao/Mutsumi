@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AgentMetadata, ContextItem } from '../types';
+import { AgentMetadata } from '../types';
 import { t } from '../i18n';
 import { SkillManager, SkillMetadata } from '../contextManagement/skillManager';
 import { ContextTreeItem, ContextItemData } from './contextTreeItem';
@@ -32,7 +32,7 @@ export interface McpToolRecord {
  * @class ContextTreeDataProvider
  * @implements {vscode.TreeDataProvider<ContextTreeItem>}
  * @example
- * const provider = new ContextTreeDataProvider(extensionUri);
+ * const provider = new ContextTreeDataProvider(mcpRegistry);
  * vscode.window.createTreeView('mutsumi.contextSidebar', { treeDataProvider: provider });
  */
 export class ContextTreeDataProvider implements vscode.TreeDataProvider<ContextTreeItem> {
@@ -51,15 +51,11 @@ export class ContextTreeDataProvider implements vscode.TreeDataProvider<ContextT
     /** @description All available skills from SkillManager */
     private _allSkills: SkillMetadata[] = [];
 
-    /** @description Extension URI for resolving paths */
-    private _extensionUri: vscode.Uri;
-
     /**
      * @description Creates a new context tree data provider
-     * @param {vscode.Uri} extensionUri - The extension's root URI
+     * @param {McpRegistryView} _mcpRegistry - Optional MCP registry view
      */
-    constructor(extensionUri: vscode.Uri, private readonly _mcpRegistry?: McpRegistryView) {
-        this._extensionUri = extensionUri;
+    constructor(private readonly _mcpRegistry?: McpRegistryView) {
         this.refreshRules();
         this.refreshSkills();
     }

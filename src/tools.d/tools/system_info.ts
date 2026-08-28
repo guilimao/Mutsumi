@@ -1,12 +1,10 @@
 import { ITool, ToolContext } from '../interface';
-import { resolveUri } from '../utils';
 import {
     codepageToEncoding,
     detectWindowsCodepage,
     getToolVar,
     setToolVar,
 } from '../cache';
-import * as vscode from 'vscode';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as cp from 'child_process';

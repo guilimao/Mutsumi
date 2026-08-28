@@ -224,22 +224,6 @@ class ApprovalRequestManager {
 		return { id, promise };
 	}
 
-	// Deprecated wrapper for backward compatibility if any direct calls exist
-	public addRequest(
-		actionDescription: string,
-		targetUri: string,
-		details?: string,
-		autoApproved: boolean = false,
-	): Promise<boolean> {
-		const { promise } = this.createStandardRequest(
-			actionDescription,
-			targetUri,
-			details,
-			autoApproved,
-		);
-		return promise;
-	}
-
 	public async approveRequest(id: string): Promise<void> {
 		const request = this.requests.get(id);
 		if (request && request.status === "pending") {

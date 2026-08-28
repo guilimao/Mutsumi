@@ -7,7 +7,6 @@ import {
 import type {
     Api,
     AuthInteraction,
-    Credential,
     Model,
     Models,
     MutableModels,
@@ -52,7 +51,6 @@ export class LlmProviderService {
     private snapshot: Snapshot | undefined;
     private credentialStore: VsCodeCredentialStore | undefined;
     private modelsStore: VsCodeModelsStore | undefined;
-    private context: vscode.ExtensionContext | undefined;
 
     static getInstance(): LlmProviderService {
         LlmProviderService.instance ??= new LlmProviderService();
@@ -60,7 +58,6 @@ export class LlmProviderService {
     }
 
     async initialize(context: vscode.ExtensionContext): Promise<void> {
-        this.context = context;
         this.credentialStore = new VsCodeCredentialStore(context.secrets, context.globalState);
         this.modelsStore = new VsCodeModelsStore(context.globalState);
         await this.reload();

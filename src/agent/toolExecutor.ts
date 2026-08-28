@@ -10,7 +10,7 @@ import type { AgentMessage } from "../types";
 import type { UIRenderer } from "./uiRenderer";
 import type { RenderBlock } from "../notebook/renderTypes";
 import type { IAgentSession } from "../adapters/interfaces";
-import { getCachedResult, setCachedResult } from "../tools.d/cache";
+import { executeWithToolCache } from "../tools.d/cache";
 import type { ToolCall } from '@earendil-works/pi-ai';
 
 /** Race a thenable against an abort signal; rejects when the signal fires. */
@@ -31,9 +31,6 @@ function raceAbort<T>(signal: AbortSignal, p: Thenable<T>): Promise<T> {
 		);
 	});
 }
-
-// Re-export for statusBar
-export { clearToolCache, getToolCacheSize } from "../tools.d/cache";
 
 /**
  * Callbacks for UI updates and termination signaling.
@@ -124,8 +121,6 @@ export class ToolExecutor {
 
 			const context: ToolContext = {
 				allowedUris: this.allowedUris,
-				notebook: undefined,
-				execution: undefined,
 				session: this.session,
 				toolSession,
 				abortSignal: toolSession.abortSignal,
@@ -140,28 +135,18 @@ export class ToolExecutor {
 				},
 			};
 
-			const shouldCache = this.toolSet.getShouldCache(toolName);
-
 			let toolResult = "";
 			let isError = false;
 			try {
-				if (shouldCache) {
-					const cached = getCachedResult(toolName, toolArgs);
-					if (cached !== undefined) {
-						toolResult = cached;
-					} else {
-						toolResult = await raceAbort(
-							toolSession.abortSignal,
-							this.toolSet.execute(toolName, toolArgs, context),
-						);
-						setCachedResult(toolName, toolArgs, toolResult);
-					}
-				} else {
-					toolResult = await raceAbort(
+				toolResult = await executeWithToolCache(
+					toolName,
+					toolArgs,
+					this.toolSet.getShouldCache(toolName),
+					() => raceAbort(
 						toolSession.abortSignal,
 						this.toolSet.execute(toolName, toolArgs, context),
-					);
-				}
+					),
+				);
 			} catch (err: any) {
 				if (toolSession.isAborted) {
 					toolResult = `[Interrupted] The ${toolName} tool execution was forcibly stopped by the user.`;

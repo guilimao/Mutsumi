@@ -6,8 +6,7 @@
 import * as vscode from "vscode";
 import type { ITool } from "../tools.d/interface";
 import { ToolRegistry } from "../tools.d/toolManager";
-import { type ToolSetsConfig, ToolSetDefinition } from "../config/interfaces";
-import { DEFAULT_MUTSUMI_CONFIG } from "../config/types";
+import type { ToolSetsConfig } from "../config/interfaces";
 
 /**
  * ToolSetRegistry manages named collections of tools.

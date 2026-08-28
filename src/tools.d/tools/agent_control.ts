@@ -1,4 +1,3 @@
-import * as vscode from 'vscode';
 import { ITool, ToolContext } from '../interface';
 import { AgentOrchestrator } from '../../agent/agentOrchestrator';
 import { AgentTypeRegistry } from '../../registry/agentTypeRegistry';

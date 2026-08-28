@@ -313,7 +313,7 @@ HTTP 路径：
 这两条路径都会：
 
 - 拒绝 `agentType` 缺失的 agent
-- 调用 `createToolSetForAgent(agentType, uuid, parent_agent_id)`
+- 调用 `createToolSetForAgent({ agentType, agentId: uuid, parentAgentId: parent_agent_id, enabledMcpTools })`
 - 通过 registry 解析角色的 tool sets
 - 仅在 child agent 的情况下运行时注入 `task_finish`
 
