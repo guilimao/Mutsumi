@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { isCommonIgnored } from '../tools.d/utils';
 import { ToolManager } from '../tools.d/toolManager';
 import { t } from '../i18n';

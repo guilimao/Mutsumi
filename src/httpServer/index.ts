@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import * as net from 'net';
 import * as crypto from 'crypto';
 import express = require('express');
-import bodyParser = require('body-parser');
 import { HeadlessAdapter } from '../adapters/headlessAdapter';
 import { HttpServerOptions } from './types';
 import { debugLogger } from '../debugLogger';
@@ -148,7 +147,7 @@ export class HttpServer {
             next();
         });
 
-        this.app.use(bodyParser.json({ limit: '2mb' }));
+        this.app.use(express.json({ limit: '2mb' }));
 
         // Agents endpoints
         this.app.post('/agents', createCreateAgentHandler({ extensionUri: this.extensionUri }));

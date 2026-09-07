@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { TextDecoder, TextEncoder } from 'util';
 import {
     AgentContext,
     AgentMessage,
@@ -48,13 +47,6 @@ export interface GenericCellData {
         mutsumi_interaction?: PersistedAgentMessage[];
         [key: string]: any;
     };
-}
-
-/**
- * Result of converting persisted messages to cells.
- */
-export interface MessageToCellsResult {
-    cells: GenericCellData[];
 }
 
 /**

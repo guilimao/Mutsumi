@@ -1,6 +1,4 @@
-import * as vscode from 'vscode';
 import type * as express from 'express';
-import { AgentRegistry } from '../agent/registry';
 import type { HeadlessAdapter } from '../adapters/headlessAdapter';
 
 export interface StopAgentHandlerOptions {

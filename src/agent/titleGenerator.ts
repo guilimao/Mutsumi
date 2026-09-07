@@ -5,7 +5,7 @@
 
 import * as vscode from 'vscode';
 import { AgentMessage, AgentMetadata, ModelSelection } from '../types';
-import { LLMClient, LLMClientConfig } from './llmClient';
+import { LLMClientConfig } from './llmClient';
 import { AgentOrchestrator } from './agentOrchestrator';
 import { IAgentSession } from '../adapters/interfaces';
 import { LiteAdapter } from '../adapters/liteAdapter';

@@ -10,11 +10,7 @@
  * @module config/types
  */
 
-import {
-	type MutsumiConfig,
-	AgentTypeConfig,
-	ToolSetsConfig,
-} from "./interfaces";
+import type { MutsumiConfig } from "./interfaces";
 
 // Re-export all interfaces
 export {

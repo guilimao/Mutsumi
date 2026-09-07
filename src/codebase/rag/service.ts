@@ -1,6 +1,4 @@
 import * as vscode from "vscode";
-import * as path from "path";
-import * as fs from "fs";
 import {
   ChunkResult,
   ChunkInfo,
@@ -587,8 +585,6 @@ export class RagService implements vscode.Disposable {
         INSERT INTO chunks (file_id, chunk_hash, chunk_text, symbol_name, start_line, end_line)
         VALUES (?,?,?,?,?,?)
       `);
-      const insertVec = db.prepare('INSERT INTO vec_chunks(rowid, embedding) VALUES (?,?)');
-
       db.transaction(() => {
         for (const { chunk, vec } of embeddings) {
           let chunkId: number;

@@ -49,12 +49,11 @@ export class AgentSidebarProvider {
 
 	/**
 	 * @description Creates an Agent sidebar provider instance
-	 * @param {vscode.Uri} _extensionUri - The root URI of the extension
 	 */
-	constructor(private readonly _extensionUri: vscode.Uri, private readonly _mcpRegistry?: McpRegistryView) {
+	constructor(private readonly _mcpRegistry?: McpRegistryView) {
 		this._agentTreeDataProvider = new AgentTreeDataProvider();
 		this._approvalTreeDataProvider = new ApprovalTreeDataProvider();
-		this._contextTreeDataProvider = new ContextTreeDataProvider(_extensionUri, _mcpRegistry);
+		this._contextTreeDataProvider = new ContextTreeDataProvider(_mcpRegistry);
 		this._shellTaskTreeDataProvider = new ShellTaskTreeDataProvider();
 	}
 

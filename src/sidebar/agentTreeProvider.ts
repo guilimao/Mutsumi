@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AgentTreeItem, AgentNodeData } from './agentTreeItem';
+import { AgentTreeItem } from './agentTreeItem';
 import { AgentOrchestrator } from '../agent/agentOrchestrator';
 
 /**

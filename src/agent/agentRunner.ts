@@ -57,7 +57,7 @@ export class AgentRunner {
      * @param {IAgentSession} session - The agent session
      */
     constructor(
-        private options: AgentRunOptions,
+        options: AgentRunOptions,
         toolSet: ToolSet,
         session: IAgentSession
     ) {

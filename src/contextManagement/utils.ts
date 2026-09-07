@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as crypto from "crypto";
-import { AgentMessage } from "../types";
 import { TextDecoder } from "util";
 import { ToolManager } from "../tools.d/toolManager";
 import type { ToolContext } from "../tools.d/interface";
@@ -9,7 +8,6 @@ import {
 	type MessageContent,
 	type ContentPartText,
 	type ContentPartImage,
-	ContextItem,
 } from "../types";
 import { LiteAdapter } from "../adapters/liteAdapter";
 import { ToolSession } from "../tools.d/toolSession";
@@ -76,7 +74,7 @@ export async function parseUserMessageWithImages(
 	let lastIndex = 0;
 
 	for (const match of matches) {
-		const [fullMatch, altText, uriStr] = match;
+		const [fullMatch, , uriStr] = match;
 		const index = match.index!;
 
 		if (index > lastIndex) {
@@ -244,14 +242,6 @@ export async function readResource(
 		}
 		return content;
 	}
-}
-
-/**
- * Check if URI points to a Markdown file
- */
-export function isMarkdownFile(uri: vscode.Uri): boolean {
-	const ext = path.extname(uri.path).toLowerCase();
-	return ext === ".md";
 }
 
 /**

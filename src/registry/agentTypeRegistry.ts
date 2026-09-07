@@ -4,7 +4,6 @@
  */
 
 import type { AgentTypeConfig, AgentTypeConfigMap } from "../config/interfaces";
-import { DEFAULT_MUTSUMI_CONFIG } from "../config/types";
 
 /**
  * Stores agent type configurations, validates toolSets/child types, provides entry type queries.

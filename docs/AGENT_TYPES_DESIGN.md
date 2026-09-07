@@ -313,7 +313,7 @@ HTTP path:
 Both paths:
 
 - reject agents with missing `agentType`
-- call `createToolSetForAgent(agentType, uuid, parent_agent_id)`
+- call `createToolSetForAgent({ agentType, agentId: uuid, parentAgentId: parent_agent_id, enabledMcpTools })`
 - resolve role tool sets through registries
 - inject `task_finish` only when the session is a child agent
 

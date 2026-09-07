@@ -344,7 +344,7 @@ export async function activate(
 	);
 
 	// 2. Sidebar
-	sidebarProvider = new AgentSidebarProvider(context.extensionUri, mcpRegistry);
+	sidebarProvider = new AgentSidebarProvider(mcpRegistry);
 	sidebarProvider.registerTreeView(context);
 	AgentOrchestrator.getInstance().setSidebar(sidebarProvider);
 
@@ -363,7 +363,6 @@ export async function activate(
 	context.subscriptions.push(controller);
 
 	AgentOrchestrator.getInstance().registerController(
-		agentController,
 		controller,
 	);
 

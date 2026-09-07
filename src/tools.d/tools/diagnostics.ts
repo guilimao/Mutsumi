@@ -1,7 +1,6 @@
 import { ITool, ToolContext } from '../interface';
 import { resolveUri } from '../utils';
 import * as vscode from 'vscode';
-import * as path from 'path';
 
 export const getWarningErrorTool: ITool = {
     name: 'diagnostics',

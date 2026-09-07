@@ -7,7 +7,6 @@ import { initializeRules } from '../contextManagement/prompts';
 import { getAvailableRules } from './utils';
 import { MutsumiSerializer } from '../notebook/serializer';
 import { resolveAgentDefaults, validateEntryAgentType } from '../config/resolver';
-import type { AgentContext, AgentMetadata } from '../types';
 import { McpRegistry } from '../mcp/registry';
 import { decodeAgentContext } from '../mtmFormat';
 

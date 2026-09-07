@@ -265,7 +265,7 @@ export class DispatchSessionManager {
      * manager.clearAllSessions();
      */
     public clearAllSessions(): void {
-        for (const [parentId, session] of this.activeDispatches) {
+        for (const session of this.activeDispatches.values()) {
             session.reject(new Error('Session manager cleared'));
         }
         this.activeDispatches.clear();

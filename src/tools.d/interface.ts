@@ -1,13 +1,8 @@
-import type * as vscode from 'vscode';
 import type { IAgentSession } from '../adapters/interfaces';
 import type { ToolSession } from './toolSession';
 
 export interface ToolContext {
     allowedUris: string[];
-    /** @deprecated Use `session` instead. Will be removed in future versions. */
-    notebook?: vscode.NotebookDocument;
-    /** @deprecated Use `session` instead. Will be removed in future versions. */
-    execution?: vscode.NotebookCellExecution;
     session: IAgentSession;
     /** Per-tool-call execution session; abort this to stop a running tool. */
     toolSession: ToolSession;

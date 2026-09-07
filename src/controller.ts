@@ -4,7 +4,7 @@
  */
 
 import * as vscode from 'vscode';
-import { ToolSet, ToolRegistry, createToolSetForAgent } from './tools.d/toolManager';
+import { createToolSetForAgent } from './tools.d/toolManager';
 import { AgentRunner } from './agent/agentRunner';
 import { AgentOrchestrator } from './agent/agentOrchestrator';
 import { NotebookAdapter } from './adapters/notebookAdapter';
@@ -24,9 +24,6 @@ import { t } from './i18n';
  * await controller.execute(cells, notebook, notebookController);
  */
 export class AgentController {
-    /** Execution order counter for tracking cell execution sequence */
-    private executionOrder = 0;
-
     /**
      * Creates a new AgentController instance.
      * @constructor

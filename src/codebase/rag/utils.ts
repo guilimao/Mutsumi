@@ -31,15 +31,6 @@ export function mkChunk(
   return { text, hash: sha256(text), symbolName, startLine, endLine };
 }
 
-export function isDocumentSymbolArray(
-  arr: vscode.DocumentSymbol[] | vscode.SymbolInformation[] | undefined
-): arr is vscode.DocumentSymbol[] {
-  if (!arr || arr.length === 0) {
-    return false;
-  }
-  return "children" in arr[0];
-}
-
 // ════════════════════════════════════════════════════════════════════════════
 //  Chunking strategies
 // ════════════════════════════════════════════════════════════════════════════

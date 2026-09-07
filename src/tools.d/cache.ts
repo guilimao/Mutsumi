@@ -54,18 +54,9 @@ export function setToolVar<T>(name: string, value: T): void {
 }
 
 /**
- * Check if a generic tool variable is cached.
- * @param name - Variable name
- * @returns True if the variable is cached
- */
-export function hasToolVar(name: string): boolean {
-	return toolVariableCache.has(name);
-}
-
-/**
  * Clear all cached tool variables and results.
  */
-export function clearToolVars(): void {
+export function clearToolCache(): void {
 	cacheLog(`Clearing cache. Previous size: ${toolVariableCache.size}`);
 	toolVariableCache.clear();
 }
@@ -76,81 +67,36 @@ export function clearToolVars(): void {
  * @param args - Tool arguments
  * @returns Cache key string
  */
-export function generateCacheKey(toolName: string, args: any): string {
+function generateCacheKey(toolName: string, args: unknown): string {
 	const key = `${toolName}:${JSON.stringify(args)}`;
 	cacheLog(`Generated key: ${key}`);
 	return key;
 }
 
 /**
- * Clear all cached tool results.
- * @deprecated Use {@link clearToolVars} instead.
+ * Execute a tool through the shared cache policy used by both runtime and
+ * user-authored pre-execution paths. The caller retains ownership of approval,
+ * cancellation, and tool-session lifecycle inside the supplied operation.
  */
-export function clearToolCache(): void {
-	clearToolVars();
-}
-
-/**
- * Get the number of cached tool variables/results.
- * @returns Cache size
- */
-export function getToolCacheSize(): number {
-	return toolVariableCache.size;
-}
-
-/**
- * Log current cache contents for debugging.
- */
-export function logCacheContents(): void {
-	cacheLog(`Current cache entries (${toolVariableCache.size}):`);
-	for (const [key, value] of toolVariableCache.entries()) {
-		let length: number;
-		if (typeof value === "string") {
-			length = value.length;
-		} else if (Buffer.isBuffer(value)) {
-			length = value.length;
-		} else {
-			length = JSON.stringify(value).length;
-		}
-		cacheLog(`  Key: "${key}" -> Value length: ${length}`);
+export async function executeWithToolCache(
+	toolName: string,
+	args: unknown,
+	shouldCache: boolean,
+	operation: () => Promise<string>,
+): Promise<string> {
+	if (!shouldCache) {
+		return operation();
 	}
-}
 
-/**
- * Check if a result is cached for the given tool and arguments.
- * @param toolName - Tool name
- * @param args - Tool arguments
- * @returns True if result is cached
- */
-export function hasCachedResult(toolName: string, args: any): boolean {
-	return hasToolVar(generateCacheKey(toolName, args));
-}
+	const key = generateCacheKey(toolName, args);
+	const cached = getToolVar<string>(key);
+	if (cached !== undefined) {
+		return cached;
+	}
 
-/**
- * Get cached tool result.
- * @param toolName - Tool name
- * @param args - Tool arguments
- * @returns Cached result, or undefined if not found
- */
-export function getCachedResult(
-	toolName: string,
-	args: any,
-): string | undefined {
-	return getToolVar<string>(generateCacheKey(toolName, args));
-}
-
-/**
- * Store tool result in cache.
- * @param toolName - Tool name
- * @param args - Tool arguments
- * @param result - Tool execution result
- */
-export function setCachedResult(
-	toolName: string,
-	args: any,
-	result: string,
-): void {
-	setToolVar(generateCacheKey(toolName, args), result);
+	const result = await operation();
+	setToolVar(key, result);
+	return result;
 }
 
 /**

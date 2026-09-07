@@ -9,7 +9,6 @@ import {
 	type AgentTypeConfig,
 	DEFAULT_MUTSUMI_CONFIG,
 	validateMutsumiConfig,
-	ConfigValidationError,
 } from "./types";
 
 /**

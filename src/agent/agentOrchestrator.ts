@@ -6,13 +6,11 @@
 import * as vscode from 'vscode';
 import { v4 as uuidv4 } from 'uuid';
 import { AgentSidebarProvider } from '../sidebar/agentSidebar';
-import { AgentController } from '../controller';
 import { AgentStateInfo, AgentRuntimeStatus, ContextItem, ModelSelection } from '../types';
 import { AgentRegistry } from './registry';
 import { DispatchSessionManager } from './dispatch';
 import { AgentFileOperations } from './fileOps';
 import { AgentTreeUtils } from './treeUtils';
-import { AgentTypeRegistry } from '../registry/agentTypeRegistry';
 
 /**
  * Orchestrates agent lifecycle, state management, and dispatch operations.
@@ -25,8 +23,6 @@ export class AgentOrchestrator {
     private static instance: AgentOrchestrator;
     /** Sidebar provider for UI updates */
     private sidebar?: AgentSidebarProvider;
-    /** Agent controller reference */
-    private agentController?: AgentController;
     /** Notebook controller reference */
     private notebookController?: vscode.NotebookController;
 
@@ -81,15 +77,12 @@ export class AgentOrchestrator {
     }
 
     /**
-     * Registers the agent and notebook controllers.
-     * @param {AgentController} agentController - The agent controller
+     * Registers the notebook controller.
      * @param {vscode.NotebookController} notebookController - The notebook controller
      */
     public registerController(
-        agentController: AgentController,
         notebookController: vscode.NotebookController
     ): void {
-        this.agentController = agentController;
         this.notebookController = notebookController;
     }
 
