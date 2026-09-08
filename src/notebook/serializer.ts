@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { Usage } from '@earendil-works/pi-ai';
 import {
     AgentContext,
     AgentMessage,
@@ -12,7 +13,7 @@ import { ToolManager } from '../tools.d/toolManager';
 import { v4 as uuidv4 } from 'uuid';
 import { debugLogger } from '../debugLogger';
 import { resolveAgentDefaults } from '../config/resolver';
-import { RenderBlock, RenderData } from './renderTypes';
+import { RenderBlock, RenderData, toBlockUsage } from './renderTypes';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { decodeGhostBlock } from '../contextManagement/ghostBlocks';
 import { t } from '../i18n';
@@ -227,9 +228,17 @@ export function extractGhostBlocksFromCells(cells: GenericCellData[]): (GhostBlo
 
 /**
  * Build RenderBlocks from an interaction message group.
- * Pure function shared by deserializeNotebook output generation.
+ * Pure function shared by deserializeNotebook output generation; exported for
+ * hydration-attach parity tests.
+ *
+ * Usage attach rule (one badge per assistant round) mirrors the live UIRenderer
+ * path, see {@link UIRenderer.commitRoundUI} / appendBlock: a message with tool
+ * calls badges its FIRST toolCall block (live attaches the first tool block
+ * appended after commitRoundUI); a content-only message badges its LAST text
+ * block (live attaches the round's merged content at commit). Reasoning-only
+ * rounds carry no badge on either path.
  */
-function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent: boolean): RenderBlock[] {
+export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent: boolean): RenderBlock[] {
     const blocks: RenderBlock[] = [];
     const toolResults = new Map<string, Extract<PersistedAgentMessage, { role: 'toolResult' }>>();
     for (const message of group) {
@@ -238,16 +247,22 @@ function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent
 
     for (const m of group) {
         if (m.role === 'assistant') {
+            // Attach candidates in part order: content/tool blocks carry the badge; reasoning
+            // blocks never do. See the function doc for the parity rule.
+            let lastContentBlock: Extract<RenderBlock, { type: 'content' | 'toolCall' }> | undefined;
+            let firstToolCallBlock: Extract<RenderBlock, { type: 'content' | 'toolCall' }> | undefined;
             for (const part of m.content) {
                 if (part.type === 'thinking' && part.thinking) {
                     blocks.push({ type: 'reasoning', markdown: part.thinking, collapsed: true });
                 } else if (part.type === 'text' && part.text) {
-                    blocks.push({ type: 'content', markdown: part.text });
+                    const block: RenderBlock = { type: 'content', markdown: part.text };
+                    blocks.push(block);
+                    lastContentBlock = block;
                 } else if (part.type === 'toolCall') {
                     const result = toolResults.get(part.id);
                     const summary = ToolManager.getInstance().getPrettyPrint(part.name, part.arguments, isSubAgent);
                     const renderingConfig = ToolManager.getInstance().getToolRenderingConfig(part.name, isSubAgent);
-                    blocks.push({
+                    const block: RenderBlock = {
                         type: 'toolCall',
                         name: part.name,
                         args: part.arguments,
@@ -255,8 +270,17 @@ function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent
                         result: result ? serializeContentToString(result.content) : undefined,
                         isStreaming: false,
                         renderingConfig,
-                    });
+                    };
+                    blocks.push(block);
+                    lastContentBlock = block;
+                    firstToolCallBlock ??= block;
                 }
+            }
+            // The persisted shape keeps usage loose; hydration validates it before any send.
+            const usage = toBlockUsage(m.usage as Usage | undefined);
+            const usageBlock = firstToolCallBlock ?? lastContentBlock;
+            if (usage && usageBlock) {
+                usageBlock.usage = usage;
             }
         }
     }

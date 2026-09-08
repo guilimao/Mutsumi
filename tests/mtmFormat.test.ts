@@ -20,7 +20,7 @@ vi.mock('vscode', () => ({
 import { toPiContext } from '../src/llm/context';
 import { decodeAgentContext, encodeAgentContext, INVALID_MTM_FILE, UNSUPPORTED_MTM_FORMAT } from '../src/mtmFormat';
 import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage, type PersistedAgentMessage } from '../src/types';
-import { extractNotebookNotes, genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
+import { extractNotebookNotes, buildInteractionRenderBlocks, genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
 import { parseUserMessageWithImages } from '../src/contextManagement/utils';
 import { hydrateProviderMessage, mergeConsecutiveUserMessages } from '../src/contextManagement/history';
 
@@ -211,5 +211,61 @@ describe(`.mtm format version ${MTM_FORMAT_VERSION}`, () => {
         await expect(parseUserMessageWithImages('![image](data:image/png;base64,AQID)')).resolves.toEqual([
             { type: 'image', mimeType: 'image/png', data: 'AQID' },
         ]);
+    });
+});
+
+describe('serializer hydration usage attach (parity with the live UIRenderer path)', () => {
+    const usage = { input: 100, output: 20, totalTokens: 120, cost: { total: 0.0005 } };
+    const assistantWith = (content: unknown[]): PersistedAgentMessage => ({
+        role: 'assistant',
+        api: 'openai-completions',
+        provider: 'anthropic',
+        model: 'claude-test',
+        content: content as PersistedAgentMessage['content'],
+        timestamp: 2,
+        usage,
+    } as unknown as PersistedAgentMessage);
+
+    it('badges the FIRST toolCall block when a round carries several tool calls', () => {
+        const blocks = buildInteractionRenderBlocks([assistantWith([
+            { type: 'text', text: 'calling tools' },
+            { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
+            { type: 'toolCall', id: 'call-2', name: 'grep', arguments: { pattern: 'x' } },
+        ])], false);
+        const toolBlocks = blocks.filter(block => block.type === 'toolCall');
+        expect(toolBlocks).toHaveLength(2);
+        // Live path attaches the round's first appended tool block; hydration must agree
+        // so the badge does not move to the last tool block after a .mtm reload.
+        expect(toolBlocks[0]).toMatchObject({ usage: { input: 100, output: 20 } });
+        expect(toolBlocks[1].usage).toBeUndefined();
+        expect(blocks.find(block => block.type === 'content')?.usage).toBeUndefined();
+    });
+
+    it('badges the content block of content-only rounds', () => {
+        const blocks = buildInteractionRenderBlocks([assistantWith([
+            { type: 'text', text: 'first part' },
+            { type: 'text', text: 'second part' },
+        ])], false);
+        const contentBlocks = blocks.filter(block => block.type === 'content');
+        expect(contentBlocks).toHaveLength(2);
+        expect(contentBlocks[0].usage).toBeUndefined();
+        expect(contentBlocks[1]).toMatchObject({ usage: { input: 100, output: 20 } });
+    });
+
+    it('leaves reasoning-only rounds unbadged', () => {
+        const blocks = buildInteractionRenderBlocks([assistantWith([
+            { type: 'thinking', thinking: 'ponder' },
+        ])], false);
+        expect(blocks).toHaveLength(1);
+        expect(blocks[0]).toMatchObject({ type: 'reasoning' });
+        expect((blocks[0] as { usage?: unknown }).usage).toBeUndefined();
+    });
+
+    it('skips attach when the persisted message carries no usage', () => {
+        const bare = assistantWith([{ type: 'text', text: 'no usage here' }]);
+        delete (bare as { usage?: unknown }).usage;
+        const blocks = buildInteractionRenderBlocks([bare], false);
+        expect(blocks[0]).toMatchObject({ type: 'content', markdown: 'no usage here' });
+        expect((blocks[0] as { usage?: unknown }).usage).toBeUndefined();
     });
 });

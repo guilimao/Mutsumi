@@ -94,11 +94,12 @@ function createRunner(maxLoops = 4) {
         getShouldCache: () => false,
         execute: async () => ({ content: 'ok' }),
     };
-    return new AgentRunner(
+    const runner = new AgentRunner(
         { provider: 'faux-runner', model: 'faux-model', maxLoops },
         toolSet as any,
         session as any,
     );
+    return { runner, session };
 }
 
 describe('AgentRunner over the pi-ai faux provider', () => {
@@ -110,7 +111,8 @@ describe('AgentRunner over the pi-ai faux provider', () => {
     it('completes a plain round trip with the SDK-produced assistant message', async () => {
         faux().setResponses([fauxAssistantMessage([fauxText('all done')])]);
 
-        const result = await createRunner().run(new AbortController(), {
+        const { runner, session } = createRunner();
+        const result = await runner.run(new AbortController(), {
             messages: [{ role: 'user', content: 'go', timestamp: 1 }],
         });
 
@@ -122,6 +124,16 @@ describe('AgentRunner over the pi-ai faux provider', () => {
             model: 'faux-model',
             content: [{ type: 'text', text: 'all done' }],
         });
+
+        // Terminal flush: the last output frame commits the content block (the usage-attach
+        // point) instead of leaving it stranded in the streaming active area.
+        const calls = session.replaceOutput.mock.calls as unknown as [string, unknown][];
+        const finalFrame = JSON.parse(calls.at(-1)?.[0] ?? '{}') as {
+            active: unknown;
+            committed: { type: string; markdown: string }[];
+        };
+        expect(finalFrame.active).toBeNull();
+        expect(finalFrame.committed.at(-1)).toMatchObject({ type: 'content', markdown: 'all done' });
     });
 
     it('runs a full tool loop: SDK tool call -> tool result -> SDK final answer', async () => {
@@ -130,7 +142,8 @@ describe('AgentRunner over the pi-ai faux provider', () => {
             fauxAssistantMessage([fauxText('summarized')]),
         ]);
 
-        const result = await createRunner().run(new AbortController(), {
+        const { runner } = createRunner();
+        const result = await runner.run(new AbortController(), {
             messages: [{ role: 'user', content: 'go', timestamp: 1 }],
         });
 
@@ -156,7 +169,8 @@ describe('AgentRunner over the pi-ai faux provider', () => {
             errorMessage: 'faux upstream exploded',
         })]);
 
-        const result = await createRunner().run(new AbortController(), {
+        const { runner } = createRunner();
+        const result = await runner.run(new AbortController(), {
             messages: [{ role: 'user', content: 'go', timestamp: 1 }],
         });
 

@@ -6,6 +6,7 @@
  */
 
 import { RENDERER_CSS } from './css';
+import { formatTokens } from './formatTokens';
 
 import { micromark } from 'micromark';
 import { gfm, gfmHtml } from 'micromark-extension-gfm';
@@ -14,8 +15,17 @@ import { toHtml } from 'hast-util-to-html';
 
 // Types matching src/notebook/renderTypes.ts (duplicated here to avoid
 // importing from extension code in the renderer process)
+interface BlockUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  costTotal: number;
+}
+
 type RenderBlock =
-  | { type: 'content'; markdown: string }
+  | { type: 'content'; markdown: string; usage?: BlockUsage }
   | { type: 'reasoning'; markdown: string; collapsed: boolean }
   | {
       type: 'toolCall';
@@ -24,6 +34,7 @@ type RenderBlock =
       summary: string;
       result?: string;
       isStreaming: boolean;
+      usage?: BlockUsage;
       renderingConfig?: {
         argsToCodeBlock?: string[];
         codeBlockFilePaths?: (string | undefined)[];
@@ -164,6 +175,25 @@ function readOutputText(outputItem: RendererOutputItem): string {
   return new TextDecoder().decode(data);
 }
 
+/** Total tokens for a usage badge. */
+function usageTokens(usage: BlockUsage): number {
+  return usage.totalTokens || usage.input + usage.output;
+}
+
+/** Muted footer line for a block's token/cost usage. */
+function usageFooter(usage: BlockUsage): HTMLElement {
+  const footer = document.createElement('div');
+  footer.className = 'mutsumi-usage-footer';
+  const parts = [`in ${formatTokens(usage.input)}`, `out ${formatTokens(usage.output)}`];
+  if (usage.cacheRead > 0) parts.push(`cache ${formatTokens(usage.cacheRead)}`);
+  parts.push(`${formatTokens(usageTokens(usage))} tok`);
+  // 4dp gives $0.0001 resolution (0.01 cent); anything smaller would render as a
+  // misleading "$0.0000", so it is hidden. toBlockUsage already drops cost-only junk.
+  if (usage.costTotal >= 0.00005) parts.push(`$${usage.costTotal.toFixed(4)}`);
+  footer.textContent = parts.join(' · ');
+  return footer;
+}
+
 /** Build an unhighlighted RenderBlock DOM element. */
 function renderBlock(block: RenderBlock): HTMLElement {
   const div = document.createElement('div');
@@ -172,6 +202,7 @@ function renderBlock(block: RenderBlock): HTMLElement {
   switch (block.type) {
     case 'content': {
       div.innerHTML = renderMarkdown(block.markdown);
+      if (block.usage) div.appendChild(usageFooter(block.usage));
       break;
     }
     case 'reasoning': {
@@ -193,7 +224,10 @@ function renderBlock(block: RenderBlock): HTMLElement {
       const summary = document.createElement('summary');
       const prefix = block.isStreaming ? '⏳ ' : '';
       const suffix = block.isStreaming ? ' ...' : '';
-      summary.textContent = `${prefix}${block.summary}${suffix}`;
+      const usageBadge = block.usage
+        ? ` · ${formatTokens(usageTokens(block.usage))} tok`
+        : '';
+      summary.textContent = `${prefix}${block.summary}${suffix}${usageBadge}`;
       details.appendChild(summary);
 
       const argsDiv = document.createElement('div');
