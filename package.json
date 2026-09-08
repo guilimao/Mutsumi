@@ -688,7 +688,7 @@
         }
     },
     "scripts": {
-		"test": "vitest run",
+        "test": "vitest run",
         "vscode:prepublish": "npm run package",
         "compile": "npm run check-types && node esbuild.js",
         "check-types": "npx tsc --noEmit && npx tsc --noEmit -p tsconfig.renderer.json && npx tsc --noEmit -p tests/tsconfig.json",
@@ -699,7 +699,7 @@
         "package-local": "vsce package && npm install"
     },
     "devDependencies": {
-        "@earendil-works/pi-ai": "^0.82.1",
+        "@earendil-works/pi-ai": "^0.85.1",
         "@electron/rebuild": "^4.0.3",
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@types/better-sqlite3": "^7.6.13",
