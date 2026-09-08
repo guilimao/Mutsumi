@@ -1,3 +1,4 @@
+import { contentText } from '@earendil-works/pi-ai';
 import type { AssistantMessage, Message } from '@earendil-works/pi-ai';
 
 /** Visible textual projection used by titles, compression, debug output, and rendering. */
@@ -16,6 +17,12 @@ export function messageText(message: Message): string {
     return message.content.map(part => part.type === 'text' ? part.text : `[Image: ${part.mimeType}]`).join('');
 }
 
+/**
+ * Text-only projection of an assistant message.
+ * @description Delegates to pi-ai's contentText with an explicit '' separator: the SDK
+ * defaults to '\n' joining, while titles/compression/debug output historically used plain
+ * concatenation of text blocks.
+ */
 export function assistantText(message: AssistantMessage): string {
-    return message.content.filter(block => block.type === 'text').map(block => block.text).join('');
+    return contentText(message.content, '');
 }
