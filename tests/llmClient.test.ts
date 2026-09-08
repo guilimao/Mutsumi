@@ -37,7 +37,7 @@ describe.each([
 ] as const)('%s protocol adapter', (_label, api) => {
     it('completes a provider-neutral streamed tool-call round without a real credential', async () => {
         state.api = api;
-        const client = new LLMClient({ provider: `mock-${api}`, model: 'model', reasoningEffort: 'none' });
+        const client = new LLMClient({ provider: `mock-${api}`, model: 'model', reasoningEffort: 'off' });
         const chunks = [];
         for await (const chunk of client.streamChatCompletion({
             systemPrompt: 'rules',

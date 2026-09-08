@@ -1,3 +1,5 @@
+import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
+
 /** Non-secret configuration for a user-defined OpenAI-compatible route. */
 export interface CustomProviderProfile {
     displayName?: string;
@@ -27,5 +29,6 @@ export interface ModelInfo {
     input: readonly ('text' | 'image')[];
     contextWindow: number;
     maxTokens: number;
-    reasoningEfforts: readonly string[];
+    /** pi-ai vocabulary, derived via getSupportedThinkingLevels; empty when the model declares no reasoning. */
+    reasoningEfforts: readonly ModelThinkingLevel[];
 }

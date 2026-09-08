@@ -394,9 +394,7 @@ export class LlmProviderService {
             input: [...model.input],
             contextWindow: model.contextWindow,
             maxTokens: model.maxTokens,
-            reasoningEfforts: model.reasoning
-                ? getSupportedThinkingLevels(model).map(level => level === 'off' ? 'none' : level)
-                : [],
+            reasoningEfforts: model.reasoning ? getSupportedThinkingLevels(model) : [],
         };
     }
 

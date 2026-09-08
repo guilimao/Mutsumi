@@ -8,6 +8,7 @@ import { getAgentFromRegistry } from './utils';
 import { AgentFileOperations } from '../agent/fileOps';
 import { getDefaultModelSelection, resolveModelSelection } from '../utils';
 import {
+    canonicalReasoningEffortSetting,
     normalizeReasoningEffort,
     REASONING_EFFORT_SETTING_VALUES
 } from '../agent/types';
@@ -29,7 +30,10 @@ export async function handleChat(
     const body = req.body ?? {};
     const { prompt, model, provider, stream } = body;
     const hasReasoningEffort = Object.prototype.hasOwnProperty.call(body, 'reasoning_effort');
-    const bodyReasoningEffort = body.reasoning_effort;
+    // Legacy alias 'none' canonicalizes to the SDK level 'off' (docs D1) via the shared helper.
+    const bodyReasoningEffort = typeof body.reasoning_effort === 'string'
+        ? canonicalReasoningEffortSetting(body.reasoning_effort)
+        : body.reasoning_effort;
     const isStreamMode = stream === true;
 
     if (!uuid) {
@@ -46,7 +50,7 @@ export async function handleChat(
         || !REASONING_EFFORT_SETTING_VALUES.includes(bodyReasoningEffort as any))) {
         res.status(400).json({
             status: 'error',
-            content: `Invalid reasoning_effort. Valid values: ${REASONING_EFFORT_SETTING_VALUES.join(', ')}`
+            content: `Invalid reasoning_effort. Valid values: ${REASONING_EFFORT_SETTING_VALUES.join(', ')} ('none' is accepted as a legacy alias of 'off')`
         });
         return;
     }

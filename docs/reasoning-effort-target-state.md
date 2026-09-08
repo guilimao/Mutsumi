@@ -1,6 +1,6 @@
 # Reasoning Effort 支持 — 最终目标状态文档
 
-> 状态：**已冻结**（2026-07-26）。本文档是 planner / implementer / reviewer 的唯一权威依据。
+> 状态：**已冻结**（2026-07-26；v1.3 于 2026-09-08 按 SDK 对齐重构方案修订）。本文档是 planner / implementer / reviewer 的唯一权威依据。
 > 任何实现中暴露的偏差，必须先修订本文档，再调整实现。
 
 ---
@@ -16,29 +16,32 @@ Mutsumi 只做透传，不做任何 provider 特化。
 
 | # | 决策 |
 |---|---|
-| D1 | 取值集合暴露厂商超集 + `default`：`'default' \| 'none' \| 'minimal' \| 'low' \| 'medium' \| 'high' \| 'xhigh' \| 'max'`。`default` = **根本不发送** `reasoning_effort` 字段（由服务器决定行为）。 |
-| D2 | 不提供 thinking 开关、不做 provider 翻译。`none` 是唯一的"关闭思考"表达；若 provider 实际无法关闭或报错，由用户改用其他值。 |
+| D1 | （v1.3）取值集合 = pi-ai SDK 权威词汇 `ModelThinkingLevel` + `default`：`'default' \| 'off' \| 'minimal' \| 'low' \| 'medium' \| 'high' \| 'xhigh' \| 'max'`。`default` = **根本不发送** `reasoning_effort` 字段（由服务器决定行为）。历史 `.mtm` 中的 legacy 值 `'none'` 在读取归一化时映射为 `'off'`（一次性别名，新写入一律用 `'off'`）。 |
+| D2 | （v1.3 注记）不提供独立 thinking 开关、不做 provider 翻译。**扁平档位枚举（含 `off`）即 SDK 的权威控制形态**（`SimpleStreamOptions.reasoning?: ThinkingLevel`），不在 UI 层发明 SDK 没有的独立开关/历史保留/预算旋钮（见 `docs/custom-model-capabilities.md`）。`off` 是唯一的"关闭思考"表达；若 provider 实际无法关闭或报错，由用户改用其他值。 |
 | D3 | 所有 provider 一律只传顶层 `reasoning_effort`。不做 baseurl 启发式识别，不加 provider 级配置字段。 |
 | D4 | 配置层级只有一级：每 agent 覆盖（`notebook.metadata.reasoning_effort`，持久化于 `.mtm`）。**不提供全局档位设置——全局行为固定为 default（不发送字段）**。理由（用户拍板）：档位取值是模型相关的（GLM-5.2 无 `low`、DeepSeek 无 `none`、Kimi 强制思考），而各会话模型异构，任何全局具体档位都必然在某些会话变成非法值。**无** agent-type 级默认；**无**父子 agent 继承。 |
 | D5 | title 生成 / 对话压缩等内部 runner **一律不发送**该字段（相当于强制 default），因为我们不知道用户的辅助模型支持哪些档位。推论：**reasoning_effort 的解析逻辑只能放在调用方（controller.ts / httpServer/chat.ts），AgentRunner 与 LLMClient 绝不自行读取与 reasoning effort 相关的任何配置**。（注：AgentRunner 中既有的 `titleGeneratorModel` 配置读取属本任务之前的存量行为，与 effort 无关，不在本禁令范围内。） |
-| D6 | 服务器 400（取值不被模型接受）→ 按现状错误路径直接弹出（通知 + error block），不自动剥离参数重试。 |
+| D6 | 服务器 400（取值不被模型接受）→ 按现状错误路径直接弹出（通知 + error block），不自动剥离参数重试。（v1.3 补充）**本地已声明不支持**（模型 `reasoning: false`，即 `getSupportedThinkingLevels` 仅含 `off`）却配置了具体档位 → 组请求时抛出**本地可见错误**（提示移除覆盖或在 `mutsumi.customProviders` 声明能力），不再依赖 SDK `clampThinkingLevel` 静默钳制丢弃。（v1.3 注）SDK 词汇内但模型不可用的组合——`reasoning:true` 未声明 `thinkingLevelMap` 时的 `xhigh`/`max`、以及 map 缺口档位——**不**本地报错，保留 SDK 就近钳制（与 SDK 内置目录模型一致）；QuickPick 只展示 `getSupportedThinkingLevels` 内档位，不会诱导选择。词汇外的任意字符串（含手改 `.mtm`）同样本地报错：SDK 会把未知档位钳到首个支持档，任何'透传'都无法到达服务器。（v1.4 注）钳制方向：`clampThinkingLevel` 对 map 缺口先**向上**就近再向下——中段显式 null（如 `medium: null`）升档（medium→high），仅 `xhigh`/`max` 等顶部缺口钳向下（→high）。这些组合可通过手改 `.mtm` 或公开 HTTP API 直达（QuickPick 不提供，但不等于不可达）；`off` 在无法关闭思考的模型上会被向上钳到首个可用档。 |
 | D7 | HTTP server 新增取/改思考等级的端点，且**必须作用在 adapter 接口的抽象函数上**：headless adapter 直接读写裸 `.mtm` 文件；notebook adapter 在文档已打开时走 VSCode WorkspaceEdit（尊重脏缓冲区），未打开时回退为直接文件读写。 |
-| D8 | **交互合并**：reasoning effort 选择并入既有 Select Model QuickPick（分节分隔线），**不新增命令/工具栏项**。点模型 item = 换模型 + 强制重置 effort 为 default；点 effort item = 只改 effort。"无覆盖"在 metadata 中的规范形态为 **key 缺席**；发送侧当值为 undefined 时，请求体中 `reasoning_effort` key 必须完全不存在。 |
+| D8 | **交互合并**：reasoning effort 选择并入既有 Select Model QuickPick（分节分隔线），**不新增命令/工具栏项**。点模型 item = 换模型 + 强制重置 effort 为 default；点 effort item = 只改 effort。"无覆盖"在 metadata 中的规范形态为 **key 缺席**；发送侧当值为 undefined 时，请求体中 `reasoning_effort` key 必须完全不存在。（v1.3）effort 区段的可选项 = `['default', ...当前模型的 getSupportedThinkingLevels(model)]`，**按模型派生**（自定义模型经能力声明后同样适用），不再用全局常量与模型能力求交集。 |
 
 ## 3. 值域与归一化（单一事实源）
 
 抽象契约（具体落点文件由 implementer 决定，建议 `src/agent/types.ts` 或 `src/utils.ts`）：
 
 ```typescript
-// 具体档位（会真实发送给服务器的值）
-type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+// 具体档位（会真实发送给服务器的值）——v1.3：直接采用 pi-ai SDK 权威词汇
+type ReasoningEffort = ModelThinkingLevel;   // = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 // 用户可配置的全集（含"不发送"语义）
 type ReasoningEffortSetting = ReasoningEffort | 'default';
-// 单一事实源常量，供 QuickPick / HTTP 校验 / package.json enum 对齐
+// 单一事实源常量，供 QuickPick / HTTP 校验 / package.json enum 对齐（类型标注跟随 SDK，升级时漂移可被 TS 捕获）
 const REASONING_EFFORT_SETTING_VALUES: readonly ReasoningEffortSetting[];
 
 // 归一化规则：'default' | '' | undefined → undefined（不发送字段）
-// 其余任何字符串**原样透传**（包括手改 .mtm 产生的未知值——配合 D6 让服务器报错可见）
+// legacy 值 'none' → 'off'（一次性别名迁移，读取路径生效）
+// 其余未知字符串**本地可见报错**（LLMClient 词汇闸门，见 D6 v1.3 注）：SDK 在请求构造期会把词汇外
+// 的档位钳制到首个支持档（clampThinkingLevel 对未知 level 返回 availableLevels[0]），'透传给服务器
+// 400'在任何一层都不可行，本地报错是唯一可见路径。
 function normalizeReasoningEffort(value: string | undefined | null): string | undefined;
 ```
 
@@ -168,7 +171,7 @@ body 新增可选 reasoning_effort：同一值域校验，瞬态覆盖本次请�
 
 | 场景 | 行为 |
 |---|---|
-| 手改 `.mtm` 写入非法值 | 原样透传 → 服务器 400 → 按 D6 弹出，用户自行修正（归一化函数不得静默丢弃未知值） |
+| 手改 `.mtm` 写入词汇外非法值 | 本地可见错误（LLMClient 词汇闸门，D6 v1.3 注；SDK 请求构造期会把未知档位钳到支持集，无法透传给服务器） |
 | HTTP PUT 时 notebook 已打开且有未保存改动 | notebook 侧 WorkspaceEdit 修改内存 metadata，脏状态语义由 VSCode 管理 |
 | HTTP PUT 时 notebook 未打开 | 回退直接写 `.mtm` 文件 |
 | 执行中（run 进行中）修改 effort | 仅影响**下一次**执行；当前 run 的 LLMClient 已构造，不热更新（与 model 现状一致） |
@@ -216,3 +219,12 @@ body 新增可选 reasoning_effort：同一值域校验，瞬态覆盖本次请�
     （根因：M1 派发提示词与文档第 3 节不一致，orchestrator 失误，文档本身无需改。）
   - **v1.1 残留文本清扫**（审计 Major-2）：§1 控制面描述、§6 fileOps 行、§9 同步负担、M1/M2 验收措辞改为现行语义；
     `interfaces.ts` JSDoc 中 "inherits the global setting" 改为"不发送字段，由服务器决定"。
+- **v1.3（2026-09-08，UI × pi-ai SDK 对齐重构）**：
+  - **D1 词汇 SDK 化**：`'none'` → `'off'`（SDK `ModelThinkingLevel`），读取路径保留 legacy 别名，新写入一律 `'off'`；
+    删除 `llmClient` 本地 allow-list 与 `toModelInfo` 的 `'off'→'none'` 改名（消除三处平行复述）。
+  - **D2 注记**：扁平档位枚举即 SDK 权威形态，不自建独立开关/历史保留/预算旋钮（SDK 0.82/0.85 均未暴露）。
+  - **D6 补充**：本地声明不支持却配置档位 → 组请求时本地可见报错，替代 SDK 静默钳制。
+  - **D8 修订**：QuickPick effort 项按当前模型 `getSupportedThinkingLevels` 派生。
+  - **测试契约升级**：D8 的 wire 层不变量（undefined 时 `reasoning_effort` key 完全不存在）纳入回环 HTTP 级测试
+    （`tests/llmWire.test.ts`），不再截断在 SDK 入参层。
+  - 关联文档：`docs/custom-model-capabilities.md`（自定义模型能力声明与乐观缺省语义）。
