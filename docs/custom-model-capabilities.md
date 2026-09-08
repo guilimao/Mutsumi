@@ -31,6 +31,7 @@ SDK **不解析**自定义 `/models` 列表的能力字段（该列表只承诺 
 | C5 | **静默降级 → 可见错误**：组请求时若 effort 为具体档位而模型声明 `reasoning: false`（此时 `getSupportedThinkingLevels(model)` 仅含 `off`），抛本地可见错误（提示移除覆盖或声明能力），不依赖 SDK 静默钳制。内置模型同样适用（它们的能力来自 SDK 目录，本就准确）。（v1.3 补注）map 缺口组合——`reasoning: true` 未声明 `thinkingLevelMap` 时的 `xhigh`/`max`、以及 map 中显式 null 的档位——**不**本地报错，保留 SDK 就近钳制（与 SDK 目录模型语义一致；QuickPick 不提供这些档位）。词汇外任意字符串亦本地报错（SDK 会钳到首个支持档，无法透传）。（v1.4 补注）钳制方向：`clampThinkingLevel` 对缺口先**向上**就近再向下——map 中段显式 null（如 `medium: null`）会把请求**升档**（medium→high，成本/延迟向上而非向下）；`xhigh`/`max` 这类顶部缺口才钳向下（→high）。可通过手改 `.mtm` 或公开 HTTP API 直达（QuickPick 不提供这些档位，但不等于不可达）。 |
 | C6 | **高级透传**：模型级 spec 可透传 `thinkingLevelMap` 与部分 `compat` 旗标（按 `profile.api` 对应类型），不做 Mutsumi 自有语义的解释或翻译——字段含义完全以 SDK 文档为准。 |
 | C7 | **UI 边界**：`manageProviders` QuickPick 流程维持纯字符串模型录入；能力声明只经 settings JSON（`mutsumi.customProviders`）。不在 QuickPick 里做能力编辑向导。 |
+| C8 | **声明变更即失效发现缓存**：pi-ai 把上次发现结果持久化到 globalState，恢复时按 id 覆盖 baseline——声明编辑（能力 / 模型列表 / api / baseUrl）若不失效缓存，会被旧目录遮蔽直到下一次网络刷新，重启也无法自愈（缓存跨进程存活）。实现：`VsCodeModelsStore` 持久化规范化 profile 指纹（仅覆盖影响 Model 对象的字段），`reload()` 比对不符即删除该 provider 的发现缓存。displayName/auth 不进入指纹，避免无谓清空目录中的未声明模型。 |
 
 ## 3. 配置 schema（settings JSON）
 
@@ -91,7 +92,8 @@ SDK **不解析**自定义 `/models` 列表的能力字段（该列表只承诺 
 
 - `src/llm/types.ts` — `CustomModelSpec` / `CustomProviderProfile.capabilities`
 - `src/llm/providerService.ts` — `customModel()` 优先级合并、`discoverCustomModels()` 声明覆盖合并（C4）、
-  `validateProfiles()` 双形态校验
+  `validateProfiles()` 双形态校验、声明指纹失效（C8）
+- `src/llm/modelStore.ts` — 发现目录缓存 + profile 指纹 sidecar（C8）
 - `package.json` — `mutsumi.customProviders` schema（models items 双形态 + capabilities）
 - `src/agent/llmClient.ts` — C5 可见错误
 - `tests/llmWire.test.ts` — 乐观缺省 / compat 透传的 wire 断言

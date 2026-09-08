@@ -44,6 +44,32 @@ interface ListingEntry {
     max_output_tokens?: unknown;
 }
 
+/** Stable serialization for fingerprinting; sorts object keys so settings key order cannot flip it. */
+function canonicalize(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value && typeof value === 'object') {
+        const record = value as Record<string, unknown>;
+        return Object.fromEntries(
+            Object.keys(record).sort().map(key => [key, canonicalize(record[key])]),
+        );
+    }
+    return value;
+}
+
+/**
+ * Fingerprint of the declared fields that shape cached Model objects. displayName/auth are
+ * deliberately excluded: they do not appear in discovered Model entries, so changing them must
+ * not drop the discovery cache (undeclared discovered models would vanish until a network refresh).
+ */
+function profileFingerprint(profile: CustomProviderProfile): string {
+    return JSON.stringify(canonicalize({
+        baseUrl: profile.baseUrl,
+        api: profile.api,
+        capabilities: profile.capabilities,
+        models: profile.models,
+    }));
+}
+
 /** Extension-level owner of provider catalogs, credentials, and LLM dispatch. */
 export class LlmProviderService {
     private static instance: LlmProviderService | undefined;
@@ -70,6 +96,17 @@ export class LlmProviderService {
         const rawProfiles = vscode.workspace.getConfiguration('mutsumi')
             .get<Record<string, CustomProviderProfile>>('customProviders', {});
         const customProfiles = this.validateProfiles(rawProfiles);
+        // pi-ai restores the persisted discovery cache over the declared baseline by id, so a
+        // profile edit would otherwise stay shadowed until a successful network refresh — across
+        // restarts too, because the cache lives in globalState. Compare the persisted profile
+        // fingerprint and drop the cache when the fields that shape Model objects change.
+        for (const [id, profile] of customProfiles) {
+            const fingerprint = profileFingerprint(profile);
+            const previous = await modelsStore.readProfileFingerprint(id);
+            if (previous === fingerprint) continue;
+            if (previous !== undefined) await modelsStore.delete(id);
+            await modelsStore.writeProfileFingerprint(id, fingerprint);
+        }
         const models = createModels({ credentials, modelsStore });
         const providers = new Map<string, Provider>();
 

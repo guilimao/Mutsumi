@@ -163,6 +163,71 @@ describe('LlmProviderService registry', () => {
         await expect(service.initialize(context())).rejects.toThrow('reasoning must be a boolean');
     });
 
+    it('invalidates a cached discovered catalog when the declared profile changes, including across restarts', async () => {
+        const globalState = new MemoryMemento();
+        const restartContext = () => ({ secrets: new MemorySecrets(), globalState }) as any;
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none',
+                models: [{ id: 'discovered-model', reasoning: false }],
+            },
+        };
+        const first = new LlmProviderService();
+        await first.initialize(restartContext());
+        const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+            JSON.stringify({ data: [{ id: 'discovered-model' }, { id: 'server-only-model' }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+        ));
+        await first.refreshModels();
+        expect(first.getModel('local', 'discovered-model').reasoning).toBe(false);
+        expect(first.getModel('local', 'server-only-model').id).toBe('server-only-model');
+
+        // Edit the declaration, then simulate an extension restart: a fresh service instance
+        // sharing globalState. The persisted catalog must not shadow the new declaration.
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none',
+                models: [{ id: 'discovered-model', reasoning: true }],
+            },
+        };
+        const second = new LlmProviderService();
+        await second.initialize(restartContext());
+        expect(second.getModel('local', 'discovered-model').reasoning).toBe(true);
+        // The invalidated cache's server-only model is gone until the next network refresh.
+        expect(() => second.getModel('local', 'server-only-model')).toThrow('not available');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('invalidates the cache on api or model-list changes, not only capability specs', async () => {
+        const globalState = new MemoryMemento();
+        const restartContext = () => ({ secrets: new MemorySecrets(), globalState }) as any;
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none', api: 'openai-completions',
+                models: ['kept-model', 'removed-model'],
+            },
+        };
+        const first = new LlmProviderService();
+        await first.initialize(restartContext());
+        vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+            JSON.stringify({ data: [{ id: 'kept-model' }, { id: 'removed-model' }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+        ));
+        await first.refreshModels();
+        expect(first.getModel('local', 'kept-model').api).toBe('openai-completions');
+
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none', api: 'openai-responses',
+                models: ['kept-model'],
+            },
+        };
+        const second = new LlmProviderService();
+        await second.initialize(restartContext());
+        expect(second.getModel('local', 'kept-model').api).toBe('openai-responses');
+        expect(() => second.getModel('local', 'removed-model')).toThrow('not available');
+    });
+
     it('keeps declared specs authoritative over discovered listing entries on refresh', async () => {
         vscodeState.profiles = {
             local: {
