@@ -149,4 +149,171 @@ describe('LLM wire payload (real SDK conversion over loopback HTTP)', () => {
             message: { stopReason: 'stop', usage: { input: 5, output: 2, totalTokens: 7 } },
         });
     });
+
+    it('sends reasoning_effort for optimistic-default custom models when an effort is set', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: 'ok' }),
+            textChunk({}, 'stop'),
+        ]));
+        activeServer = loopback.server;
+        await LlmProviderService.getInstance().initialize(seedRegistry(loopback.baseUrl));
+
+        // Undeclared capabilities are optimistic (C1): reasoning reaches the wire instead of
+        // being silently clamped away by the SDK.
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model', reasoningEffort: 'high' });
+        await streamOnce(client, {
+            messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+        });
+
+        const request = lastRequest(loopback);
+        expect(request.body.reasoning_effort).toBe('high');
+        expect(request.body.enable_thinking).toBeUndefined();
+        expect(request.body.thinking).toBeUndefined();
+    });
+
+    it('omits reasoning_effort when compat passthrough disables it', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: 'ok' }),
+            textChunk({}, 'stop'),
+        ]));
+        activeServer = loopback.server;
+        vscodeState.profiles = {
+            [PROVIDER_ID]: {
+                baseUrl: loopback.baseUrl, auth: 'apiKey',
+                models: [{ id: 'wire-model', compat: { supportsReasoningEffort: false } }],
+            },
+        };
+        await LlmProviderService.getInstance().initialize(seedSecretContext());
+
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model', reasoningEffort: 'high' });
+        await streamOnce(client, {
+            messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+        });
+
+        expect('reasoning_effort' in lastRequest(loopback).body).toBe(false);
+    });
+
+    it('raises a visible local error instead of silently clamping when the model declares no reasoning', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: 'ok' }),
+            textChunk({}, 'stop'),
+        ]));
+        activeServer = loopback.server;
+        vscodeState.profiles = {
+            [PROVIDER_ID]: {
+                baseUrl: loopback.baseUrl, auth: 'apiKey',
+                models: [{ id: 'wire-model', reasoning: false }],
+            },
+        };
+        await LlmProviderService.getInstance().initialize(seedSecretContext());
+
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model', reasoningEffort: 'high' });
+        await expect(streamOnce(client, {
+            messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+        })).rejects.toThrow('declares no reasoning');
+        expect(loopback.requests).toHaveLength(0);
+    });
+
+    it('calls keyless providers through the placeholder auth gate', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: 'ok' }),
+            textChunk({}, 'stop'),
+        ]));
+        activeServer = loopback.server;
+        vscodeState.profiles = {
+            [PROVIDER_ID]: { baseUrl: loopback.baseUrl, auth: 'none', models: ['wire-model'] },
+        };
+        await LlmProviderService.getInstance().initialize({ secrets: new MemorySecrets(), globalState: new MemoryMemento() } as any);
+
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model' });
+        await streamOnce(client, {
+            messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+        });
+
+        const request = lastRequest(loopback);
+        // pi-ai requires an apiKey before building its OpenAI client; keyless routes satisfy
+        // the gate with a placeholder instead of failing at request time.
+        expect(request.headers.authorization).toBe('Bearer unused');
+    });
+
+    it('serializes function tools and streams tool-call events back', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: null, tool_calls: [{ index: 0, id: 'call-1', type: 'function', function: { name: 'read', arguments: '' } }] }),
+            textChunk({ tool_calls: [{ index: 0, function: { arguments: '{"path":"file.ts"}' } }] }),
+            textChunk({}, 'tool_calls', { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 }),
+        ]));
+        activeServer = loopback.server;
+        await LlmProviderService.getInstance().initialize(seedRegistry(loopback.baseUrl));
+
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model' });
+        const events = await streamOnce(client, {
+            systemPrompt: 'rules',
+            messages: [{ role: 'user', content: 'read it', timestamp: 1 }],
+            tools: [{ type: 'function', function: { name: 'read', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } }],
+        });
+
+        const request = lastRequest(loopback);
+        // detectCompat defaults supportsStrictMode to true for unknown URLs, so the SDK
+        // emits an explicit strict:false on every function tool.
+        expect(request.body.tools).toEqual([
+            { type: 'function', function: { name: 'read', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } } }, strict: false } },
+        ]);
+        expect(events.some(event => event.type === 'toolcall_end')).toBe(true);
+        expect(events.at(-1)).toMatchObject({
+            type: 'done',
+            message: {
+                stopReason: 'toolUse',
+                content: [{ type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'file.ts' } }],
+            },
+        });
+    });
+
+    it('converts image content blocks into image_url data URLs for optimistic-default models', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: 'seen' }),
+            textChunk({}, 'stop'),
+        ]));
+        activeServer = loopback.server;
+        await LlmProviderService.getInstance().initialize(seedRegistry(loopback.baseUrl));
+
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model' });
+        await streamOnce(client, {
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'look' },
+                    { type: 'image', mimeType: 'image/png', data: 'aGk=' },
+                ],
+                timestamp: 1,
+            }],
+        });
+
+        // Undeclared input defaults to ['text','image'] (C1): the image survives the SDK's
+        // transform instead of being replaced by an omission placeholder.
+        const wireContent = lastRequest(loopback).body.messages[0].content;
+        expect(wireContent).toEqual([
+            { type: 'text', text: 'look' },
+            { type: 'image_url', image_url: { url: 'data:image/png;base64,aGk=' } },
+        ]);
+    });
+
+    it('sends bearer auth from SecretStorage and uses max_completion_tokens', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: 'done' }),
+            textChunk({}, 'stop'),
+        ]));
+        activeServer = loopback.server;
+        await LlmProviderService.getInstance().initialize(seedRegistry(loopback.baseUrl));
+
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model' });
+        await streamOnce(client, {
+            messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+            maxTokens: 1234,
+        });
+
+        const request = lastRequest(loopback);
+        expect(request.headers.authorization).toBe('Bearer wire-secret');
+        expect(request.body.max_completion_tokens).toBe(1234);
+        expect('max_tokens' in request.body).toBe(false);
+    });
 });

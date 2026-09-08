@@ -1,11 +1,15 @@
 /** Provider-neutral LLM client backed directly by pi-ai's native Context and events. */
 
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type {
     AssistantMessage,
     AssistantMessageEvent,
+    Model,
+    ModelThinkingLevel,
     SimpleStreamOptions,
     ThinkingLevel,
 } from '@earendil-works/pi-ai';
+import type { Api } from '@earendil-works/pi-ai';
 import type { AgentMessage } from '../types';
 import type { ToolDefinition } from '../tools.d/interface';
 import { toPiContext } from '../llm/context';
@@ -41,7 +45,7 @@ export class LLMClient {
 
     async chatCompletion(options: ChatCompletionOptions): Promise<AssistantMessage> {
         const prepared = LlmProviderService.getInstance().prepare(this.provider, this.model);
-        this.assertReasoningSupported();
+        this.assertReasoningSupported(prepared.model, prepared.isBuiltIn);
         const result = await prepared.models.completeSimple(
             prepared.model,
             toPiContext(options.systemPrompt, options.messages, options.tools),
@@ -53,7 +57,7 @@ export class LLMClient {
 
     async *streamChatCompletion(options: ChatCompletionOptions): AsyncIterableIterator<AssistantMessageEvent> {
         const prepared = LlmProviderService.getInstance().prepare(this.provider, this.model);
-        this.assertReasoningSupported();
+        this.assertReasoningSupported(prepared.model, prepared.isBuiltIn);
         const events = prepared.models.streamSimple(
             prepared.model,
             toPiContext(options.systemPrompt, options.messages, options.tools),
@@ -76,15 +80,28 @@ export class LLMClient {
     }
 
     /**
-     * Rejects reasoning-effort values outside the pi-ai vocabulary before the request is built
-     * (docs/reasoning-effort-target-state.md D6): the SDK clamps unknown levels to the first
-     * supported one, so they can never reach the server for a provider 400.
+     * Turns silent degradation into a visible local error (docs/custom-model-capabilities.md C5):
+     * a model that declares no reasoning would otherwise have its effort value clamped away
+     * silently by the SDK. Unknown vocabulary is rejected here too — the SDK would clamp unknown
+     * levels to the first supported one during request building, so they can never reach the
+     * server for a provider 400. Partial thinkingLevelMap gaps (incl. xhigh/max without a
+     * declared map on reasoning-capable models) stay with the SDK's clamping, matching how SDK
+     * catalog models behave; QuickPick only offers getSupportedThinkingLevels members.
      */
-    private assertReasoningSupported(): void {
+    private assertReasoningSupported(model: Model<Api>, isBuiltIn: boolean): void {
         const effort = this.reasoningEffort;
-        if (effort === undefined) return;
+        if (effort === undefined || effort === 'off') return;
+        if (getSupportedThinkingLevels(model).includes(effort as ModelThinkingLevel)) return;
         if (!MODEL_THINKING_LEVELS.includes(effort as ReasoningEffort)) {
             throw new Error(`Unsupported reasoning effort "${effort}"`);
+        }
+        if (!model.reasoning) {
+            const remedy = isBuiltIn
+                ? 'Remove the reasoning effort override; built-in model capabilities come from the pi-ai catalog and cannot be redeclared.'
+                : 'Remove the reasoning effort override, or declare reasoning: true for this model in mutsumi.customProviders.';
+            throw new Error(
+                `Reasoning effort "${effort}" is set, but ${model.provider}/${model.id} declares no reasoning. ${remedy}`,
+            );
         }
     }
 

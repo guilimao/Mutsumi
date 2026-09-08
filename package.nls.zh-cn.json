@@ -41,6 +41,8 @@
 
 	"configuration.title": "Mutsumi",
 	"configuration.customProviders.markdownDescription": "不含秘密的自定义 OpenAI-compatible 提供商路由。请通过“管理模型提供商”命令配置 API Key，切勿在此填写密钥。",
+	"configuration.customProviders.models.markdownDescription": "模型 ID 字符串，或声明逐模型能力的对象（`reasoning`、`input`、`contextWindow`、`maxTokens`、`thinkingLevelMap`、`compat`）。未声明的能力按乐观缺省处理（`reasoning: true`、`input: [\"text\", \"image\"]`）；详见 `docs/custom-model-capabilities.md`。",
+	"configuration.customProviders.capabilities.markdownDescription": "提供商级能力缺省（`reasoning`、`input`），优先级低于逐模型声明。未声明即乐观缺省。",
 	"configuration.defaultModel.markdownDescription": "默认 `{ provider, model }` 选择。请通过“**Mutsumi: 管理模型提供商**”配置凭据和浏览支持的模型。",
 	"configuration.titleGeneratorModel.markdownDescription": "用于生成 Agent 标题的模型选择。必须是包含 `model` 与 `provider` 的对象。若为空，则回退到会话 metadata 中的模型对。",
 	"configuration.autoApproveEnabled.description": "启用后，所有工具调用将自动批准，无需用户确认（请谨慎使用）",

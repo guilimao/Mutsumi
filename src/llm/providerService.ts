@@ -19,7 +19,7 @@ import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses';
 import type { ModelSelection } from '../types';
 import { VsCodeCredentialStore } from './credentialStore';
 import { VsCodeModelsStore } from './modelStore';
-import type { CustomProviderProfile, ModelInfo, ProviderInfo } from './types';
+import type { CustomModelSpec, CustomProviderCapabilities, CustomProviderProfile, ModelInfo, ProviderInfo } from './types';
 
 const DEFAULT_CONTEXT_WINDOW = 262_144;
 const DEFAULT_MAX_TOKENS = 32_768;
@@ -106,11 +106,11 @@ export class LlmProviderService {
     }
 
     /** Capture the registry and model used by one request so config reloads cannot split it. */
-    prepare(provider: string, model: string): { models: Models; model: Model<Api>; provider: string } {
+    prepare(provider: string, model: string): { models: Models; model: Model<Api>; provider: string; isBuiltIn: boolean } {
         const snapshot = this.requireSnapshot();
         const resolved = snapshot.models.getModel(provider, model);
         if (!resolved) throw new Error(`Model "${model}" is not available from provider "${provider}"`);
-        return { models: snapshot.models, model: resolved, provider };
+        return { models: snapshot.models, model: resolved, provider, isBuiltIn: !snapshot.customProfiles.has(provider) };
     }
 
     async listProviders(): Promise<ProviderInfo[]> {
@@ -236,24 +236,126 @@ export class LlmProviderService {
             if (auth !== 'apiKey' && auth !== 'none') {
                 throw new Error(`Custom provider "${id}" has unsupported auth "${String(profile.auth)}"`);
             }
-            const models = profile.models ?? [];
-            if (!Array.isArray(models) || models.some(model => typeof model !== 'string' || !model.trim())) {
-                throw new Error(`Custom provider "${id}" models must contain non-empty strings`);
-            }
+            const models = this.validateModelEntries(id, profile.models ?? []);
+            const capabilities = this.validateCapabilities(id, profile.capabilities);
             result.set(id, {
                 ...profile.displayName?.trim() ? { displayName: profile.displayName.trim() } : {},
                 baseUrl,
                 api,
                 auth,
-                models: [...new Set(models.map(model => model.trim()))],
+                models,
+                ...(capabilities ? { capabilities } : {}),
             });
         }
         return result;
     }
 
+    private validateModelEntries(id: string, entries: unknown[]): (string | CustomModelSpec)[] {
+        const models: (string | CustomModelSpec)[] = [];
+        const seen = new Set<string>();
+        for (const entry of entries) {
+            if (typeof entry === 'string') {
+                const modelId = entry.trim();
+                if (!modelId) throw new Error(`Custom provider "${id}" models must contain non-empty strings`);
+                if (seen.has(modelId)) continue;
+                seen.add(modelId);
+                models.push(modelId);
+                continue;
+            }
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+                throw new Error(`Custom provider "${id}" models must contain non-empty strings or model specs`);
+            }
+            const spec = entry as Record<string, unknown>;
+            const modelId = typeof spec.id === 'string' ? spec.id.trim() : '';
+            if (!modelId) throw new Error(`Custom provider "${id}" model specs must have a non-empty id`);
+            // Validate before deduplicating: a malformed duplicate must still surface as a
+            // configuration error instead of being silently ignored (first entry still wins).
+            const normalized: CustomModelSpec = { id: modelId };
+            if (spec.name !== undefined) {
+                if (typeof spec.name !== 'string' || !spec.name.trim()) {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" name must be a non-empty string`);
+                }
+                normalized.name = spec.name.trim();
+            }
+            if (spec.reasoning !== undefined) {
+                if (typeof spec.reasoning !== 'boolean') {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" reasoning must be a boolean`);
+                }
+                normalized.reasoning = spec.reasoning;
+            }
+            if (spec.input !== undefined) {
+                normalized.input = this.validateInputModalities(id, modelId, spec.input);
+            }
+            if (spec.contextWindow !== undefined) {
+                if (typeof spec.contextWindow !== 'number' || !Number.isInteger(spec.contextWindow) || spec.contextWindow <= 0) {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" contextWindow must be a positive integer`);
+                }
+                normalized.contextWindow = spec.contextWindow;
+            }
+            if (spec.maxTokens !== undefined) {
+                if (typeof spec.maxTokens !== 'number' || !Number.isInteger(spec.maxTokens) || spec.maxTokens <= 0) {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" maxTokens must be a positive integer`);
+                }
+                normalized.maxTokens = spec.maxTokens;
+            }
+            if (spec.thinkingLevelMap !== undefined) {
+                if (!spec.thinkingLevelMap || typeof spec.thinkingLevelMap !== 'object' || Array.isArray(spec.thinkingLevelMap)
+                    || Object.values(spec.thinkingLevelMap).some(value => value !== null && typeof value !== 'string')) {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" thinkingLevelMap must map levels to strings or null`);
+                }
+                normalized.thinkingLevelMap = spec.thinkingLevelMap as CustomModelSpec['thinkingLevelMap'];
+            }
+            if (spec.compat !== undefined) {
+                // Shallow passthrough (C6): the SDK's compat interfaces carry nested object
+                // flags (chatTemplateArgs / chatTemplateKwargs / openRouterRouting / ...), so
+                // plain objects are accepted alongside primitives; arrays and null are not part
+                // of any SDK compat field shape and stay rejected.
+                const validCompatValue = (value: unknown): boolean =>
+                    typeof value === 'boolean' || typeof value === 'string' || typeof value === 'number'
+                    || (value !== null && typeof value === 'object' && !Array.isArray(value));
+                if (!spec.compat || typeof spec.compat !== 'object' || Array.isArray(spec.compat)
+                    || Object.values(spec.compat).some(value => !validCompatValue(value))) {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" compat must map flag names to booleans, strings, numbers, or plain objects`);
+                }
+                normalized.compat = spec.compat as CustomModelSpec['compat'];
+            }
+            if (seen.has(modelId)) continue;
+            seen.add(modelId);
+            models.push(normalized);
+        }
+        return models;
+    }
+
+    private validateCapabilities(id: string, capabilities: unknown): CustomProviderCapabilities | undefined {
+        if (capabilities === undefined) return undefined;
+        if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+            throw new Error(`Custom provider "${id}" capabilities must be an object`);
+        }
+        const raw = capabilities as Record<string, unknown>;
+        const normalized: CustomProviderCapabilities = {};
+        if (raw.reasoning !== undefined) {
+            if (typeof raw.reasoning !== 'boolean') {
+                throw new Error(`Custom provider "${id}" capabilities.reasoning must be a boolean`);
+            }
+            normalized.reasoning = raw.reasoning;
+        }
+        if (raw.input !== undefined) {
+            normalized.input = this.validateInputModalities(id, 'capabilities', raw.input);
+        }
+        return normalized;
+    }
+
+    private validateInputModalities(id: string, subject: string, input: unknown): ('text' | 'image')[] {
+        if (!Array.isArray(input) || input.length === 0
+            || input.some(value => value !== 'text' && value !== 'image')) {
+            throw new Error(`Custom provider "${id}" ${subject} input must be a non-empty subset of ['text', 'image']`);
+        }
+        return [...new Set(input as ('text' | 'image')[])];
+    }
+
     private createCustomProvider(id: string, profile: CustomProviderProfile): Provider {
         const api = profile.api ?? 'openai-completions';
-        const models = (profile.models ?? []).map(modelId => this.customModel(id, profile, modelId));
+        const models = this.declaredModelSpecs(profile).map(spec => this.customModel(id, profile, spec.id, undefined, spec));
         const auth = profile.auth ?? 'apiKey';
         return createProvider({
             id,
@@ -263,7 +365,10 @@ export class LlmProviderService {
                 apiKey: auth === 'none' ? {
                     name: 'No authentication',
                     check: async () => ({ type: 'api_key', source: 'No authentication' }),
-                    resolve: async () => ({ auth: {}, source: 'No authentication' }),
+                    // pi-ai's OpenAI APIs require an apiKey (or an authorization header) before they
+                    // will build a client; satisfy that gate with a placeholder so keyless local
+                    // servers can still be called.
+                    resolve: async () => ({ auth: { apiKey: 'unused' }, source: 'No authentication' }),
                 } : {
                     name: `${profile.displayName ?? id} API key`,
                     login: async interaction => ({
@@ -287,19 +392,41 @@ export class LlmProviderService {
         });
     }
 
-    private customModel(id: string, profile: CustomProviderProfile, modelId: string, entry?: ListingEntry): Model<Api> {
+    /** Normalizes declared models into specs; the string form is shorthand for `{ id }`. */
+    private declaredModelSpecs(profile: CustomProviderProfile): CustomModelSpec[] {
+        return (profile.models ?? []).map(entry => typeof entry === 'string' ? { id: entry } : entry);
+    }
+
+    private customModel(
+        id: string,
+        profile: CustomProviderProfile,
+        modelId: string,
+        entry?: ListingEntry,
+        spec?: CustomModelSpec,
+    ): Model<Api> {
         const api = profile.api ?? 'openai-completions';
         return {
             id: modelId,
-            name: this.label(entry?.name, entry?.display_name) ?? modelId,
+            name: spec?.name ?? this.label(entry?.name, entry?.display_name) ?? modelId,
             api,
             provider: id,
             baseUrl: profile.baseUrl,
-            reasoning: false,
-            input: ['text'],
+            // Unknown capabilities are optimistic, not unsupported (docs/custom-model-capabilities.md C1/C3):
+            // provider capabilities < listing numbers < per-model spec.
+            reasoning: spec?.reasoning ?? profile.capabilities?.reasoning ?? true,
+            input: spec?.input ?? profile.capabilities?.input ?? ['text', 'image'],
             cost: NO_COST,
-            contextWindow: this.capacity(entry?.context_window, entry?.context_length) ?? DEFAULT_CONTEXT_WINDOW,
-            maxTokens: this.capacity(entry?.max_output_tokens, entry?.max_tokens) ?? DEFAULT_MAX_TOKENS,
+            contextWindow: spec?.contextWindow
+                ?? this.capacity(entry?.context_window, entry?.context_length)
+                ?? DEFAULT_CONTEXT_WINDOW,
+            maxTokens: spec?.maxTokens
+                ?? this.capacity(entry?.max_output_tokens, entry?.max_tokens)
+                ?? DEFAULT_MAX_TOKENS,
+            ...(spec?.thinkingLevelMap ? { thinkingLevelMap: spec.thinkingLevelMap } : {}),
+            // Wire-safety default: pi-ai switches reasoning-capable models to the `developer` role,
+            // which Ollama/vLLM/SGLang-class servers commonly reject (SDK README); users can opt
+            // back in per model via the compat passthrough.
+            compat: { supportsDeveloperRole: false, ...spec?.compat } as Model<Api>['compat'],
         };
     }
 
@@ -335,12 +462,19 @@ export class LlmProviderService {
             if (!Array.isArray(data)) throw new Error(`${url} model listing has no data array`);
             const result: Model<Api>[] = [];
             const seen = new Set<string>();
+            // Declared specs must survive refresh even though createProvider lets dynamic listings
+            // replace same-id baseline models (docs/custom-model-capabilities.md C4): re-apply each
+            // spec onto its discovered entry. Declared-only models need no appending — the SDK
+            // merges the baseline, which already carries them, into currentModels().
+            const pendingSpecs = new Map(this.declaredModelSpecs(profile).map(spec => [spec.id, spec]));
             for (const raw of data) {
                 const entry = raw as ListingEntry | null;
                 const modelId = this.label(entry?.id);
                 if (!modelId || seen.has(modelId)) continue;
                 seen.add(modelId);
-                result.push(this.customModel(id, profile, modelId, entry ?? undefined));
+                const spec = pendingSpecs.get(modelId);
+                pendingSpecs.delete(modelId);
+                result.push(this.customModel(id, profile, modelId, entry ?? undefined, spec));
             }
             if (result.length === 0) throw new Error(`${url} returned no usable model IDs`);
             return result;

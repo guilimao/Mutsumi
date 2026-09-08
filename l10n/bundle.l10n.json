@@ -137,7 +137,7 @@
 	"providers.noAuth": "No authentication",
 	"providers.authentication": "Authentication",
 	"providers.manualModels": "Manual fallback model IDs",
-	"providers.manualModelsPrompt": "Optional comma-separated IDs used when /models discovery is unavailable",
+	"providers.manualModelsPrompt": "Optional comma-separated IDs used when /models discovery is unavailable. To declare per-model capabilities (reasoning, input, compat), edit the object form in mutsumi.customProviders settings",
 	"providers.savedDiscoveryFailed": "Provider saved, but model discovery failed: {0}",
 	"providers.routeId": "Custom provider route ID",
 	"providers.routeIdPrompt": "Stable ID stored in agent files",

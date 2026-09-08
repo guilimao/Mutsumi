@@ -137,7 +137,7 @@
 	"providers.noAuth": "无需鉴权",
 	"providers.authentication": "鉴权方式",
 	"providers.manualModels": "手工回退模型 ID",
-	"providers.manualModelsPrompt": "可选；以逗号分隔，在 /models 自动发现不可用时使用",
+	"providers.manualModelsPrompt": "可选；以逗号分隔，在 /models 自动发现不可用时使用。如需声明逐模型能力（reasoning、input、compat），请在 mutsumi.customProviders 设置中编辑对象形态",
 	"providers.savedDiscoveryFailed": "提供商已保存，但模型发现失败：{0}",
 	"providers.routeId": "自定义提供商路由 ID",
 	"providers.routeIdPrompt": "保存在 Agent 文件中的稳定标识",

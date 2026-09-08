@@ -437,9 +437,74 @@
                             "models": {
                                 "type": "array",
                                 "items": {
-                                    "type": "string"
+                                    "anyOf": [
+                                        {
+                                            "type": "string"
+                                        },
+                                        {
+                                            "type": "object",
+                                            "required": [
+                                                "id"
+                                            ],
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string"
+                                                },
+                                                "name": {
+                                                    "type": "string"
+                                                },
+                                                "reasoning": {
+                                                    "type": "boolean"
+                                                },
+                                                "input": {
+                                                    "type": "array",
+                                                    "minItems": 1,
+                                                    "items": {
+                                                        "enum": [
+                                                            "text",
+                                                            "image"
+                                                        ]
+                                                    }
+                                                },
+                                                "contextWindow": {
+                                                    "type": "integer",
+                                                    "minimum": 1
+                                                },
+                                                "maxTokens": {
+                                                    "type": "integer",
+                                                    "minimum": 1
+                                                },
+                                                "thinkingLevelMap": {
+                                                    "type": "object"
+                                                },
+                                                "compat": {
+                                                    "type": "object"
+                                                }
+                                            }
+                                        }
+                                    ]
                                 },
-                                "default": []
+                                "default": [],
+                                "markdownDescription": "%configuration.customProviders.models.markdownDescription%"
+                            },
+                            "capabilities": {
+                                "type": "object",
+                                "properties": {
+                                    "reasoning": {
+                                        "type": "boolean"
+                                    },
+                                    "input": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "items": {
+                                            "enum": [
+                                                "text",
+                                                "image"
+                                            ]
+                                        }
+                                    }
+                                },
+                                "markdownDescription": "%configuration.customProviders.capabilities.markdownDescription%"
                             }
                         },
                         "required": [

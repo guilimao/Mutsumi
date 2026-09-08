@@ -3,6 +3,7 @@ import type { Api, AssistantMessage } from '@earendil-works/pi-ai';
 
 const state = vi.hoisted(() => ({
     api: 'openai-completions' as Api,
+    isBuiltIn: false,
     captured: undefined as any,
     streamError: undefined as AssistantMessage | undefined,
 }));
@@ -11,6 +12,7 @@ vi.mock('../src/llm/providerService', () => ({
         getInstance: () => ({
             prepare: (provider: string, model: string) => ({
                 model: { provider, id: model },
+                isBuiltIn: state.isBuiltIn,
                 models: {
                     streamSimple: (_model: unknown, context: unknown, options: unknown) => {
                         state.captured = { context, options };
@@ -62,6 +64,23 @@ describe.each([
         expect(state.captured.context).toMatchObject({ systemPrompt: 'rules', tools: [{ name: 'read' }] });
         expect(state.captured.options).toMatchObject({ maxRetries: 0 });
         expect(state.captured.options).toMatchObject({ reasoning: 'off' });
+    });
+});
+
+describe('reasoning capability gate', () => {
+    it('points custom routes at mutsumi.customProviders', async () => {
+        state.isBuiltIn = false;
+        const client = new LLMClient({ provider: 'local', model: 'm', reasoningEffort: 'high' });
+        await expect(client.chatCompletion({ messages: [] })).rejects.toThrow(/mutsumi\.customProviders/);
+    });
+
+    it('does not point built-in models at a setting that cannot redeclare them', async () => {
+        state.isBuiltIn = true;
+        const client = new LLMClient({ provider: 'openai', model: 'gpt-4o', reasoningEffort: 'high' });
+        const error = await client.chatCompletion({ messages: [] }).then(() => undefined, (failure: Error) => failure);
+        expect(error?.message).toMatch(/built-in model capabilities come from the pi-ai catalog/);
+        expect(error?.message).not.toMatch(/mutsumi\.customProviders/);
+        state.isBuiltIn = false;
     });
 });
 
