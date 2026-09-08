@@ -1,7 +1,8 @@
 /** Streaming UI projection over pi-ai's native assistant-message event protocol. */
 
+import { isRetryableAssistantError } from '@earendil-works/pi-ai';
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai';
-import { LLMClient } from './llmClient';
+import { LLMClient, ProviderStreamError } from './llmClient';
 import type { ToolDefinition } from '../tools.d/interface';
 import type { AgentMessage } from '../types';
 
@@ -27,12 +28,12 @@ function visible(message: AssistantMessage): { content: string; reasoning: strin
     return { content: content.join(''), reasoning: reasoning.join(''), toolCalls };
 }
 
+/**
+ * SDK-based retry classification over the AssistantMessage carried by ProviderStreamError.
+ * Errors without one (registry/auth/local validation failures) are deterministic and never retried.
+ */
 function isRetryableError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return [
-        'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN',
-        'socket hang up', 'network timeout', 'failed to fetch', 'disconnected', 'network error',
-    ].some(pattern => message.toLowerCase().includes(pattern.toLowerCase()));
+    return error instanceof ProviderStreamError && isRetryableAssistantError(error.assistantMessage);
 }
 
 function delay(ms: number): Promise<void> {
@@ -80,6 +81,10 @@ export class LLMStreamHandler {
         try {
             for await (const event of this.llmClient.streamChatCompletion({ systemPrompt, messages, tools, signal })) {
                 if (event.type === 'done') return { message: event.message };
+                // LLMClient converts SDK 'error' events into a thrown providerError (carrying
+                // the AssistantMessage for retry classification) before yielding, so this branch
+                // is unreachable in practice; it doubles as the narrowing guard that keeps
+                // `partial` typed on the remaining union members.
                 if (event.type === 'error') throw new Error(event.error.errorMessage ?? 'Provider stream failed');
                 const partial = event.partial;
                 const projected = visible(partial);

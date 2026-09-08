@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Api, AssistantMessage } from '@earendil-works/pi-ai';
 
-const state = vi.hoisted(() => ({ api: 'openai-completions' as Api, captured: undefined as any }));
+const state = vi.hoisted(() => ({
+    api: 'openai-completions' as Api,
+    captured: undefined as any,
+    streamError: undefined as AssistantMessage | undefined,
+}));
 vi.mock('../src/llm/providerService', () => ({
     LlmProviderService: {
         getInstance: () => ({
@@ -17,6 +21,10 @@ vi.mock('../src/llm/providerService', () => ({
                             content: [{ type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'file.ts' } }],
                         };
                         return (async function* () {
+                            if (state.streamError) {
+                                yield { type: 'error', reason: 'error', error: state.streamError } as any;
+                                return;
+                            }
                             // Some protocols only expose complete arguments at toolcall_end.
                             yield { type: 'toolcall_end', contentIndex: 0, toolCall: message.content[0], partial: message } as any;
                             yield { type: 'done', reason: 'toolUse', message } as any;
@@ -28,7 +36,7 @@ vi.mock('../src/llm/providerService', () => ({
     },
 }));
 
-import { LLMClient } from '../src/agent/llmClient';
+import { LLMClient, ProviderStreamError } from '../src/agent/llmClient';
 
 describe.each([
     ['OpenAI', 'openai-completions'],
@@ -54,5 +62,28 @@ describe.each([
         expect(state.captured.context).toMatchObject({ systemPrompt: 'rules', tools: [{ name: 'read' }] });
         expect(state.captured.options).toMatchObject({ maxRetries: 0 });
         expect(state.captured.options).toMatchObject({ reasoning: 'off' });
+    });
+});
+
+describe('provider stream errors', () => {
+    it('throws a typed ProviderStreamError carrying the SDK assistant message', async () => {
+        const message: AssistantMessage = {
+            role: 'assistant', api: 'openai-completions', provider: 'local', model: 'm',
+            stopReason: 'error', errorMessage: 'upstream 503', timestamp: 1, content: [],
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        };
+        state.streamError = message;
+        try {
+            const client = new LLMClient({ provider: 'local', model: 'm' });
+            const consume = async (): Promise<unknown> => {
+                for await (const _chunk of client.streamChatCompletion({ messages: [] })) { /* consume */ }
+                return undefined;
+            };
+            const error = await consume().then(() => undefined, (failure: unknown) => failure);
+            expect(error).toBeInstanceOf(ProviderStreamError);
+            expect((error as ProviderStreamError).assistantMessage).toBe(message);
+        } finally {
+            state.streamError = undefined;
+        }
     });
 });

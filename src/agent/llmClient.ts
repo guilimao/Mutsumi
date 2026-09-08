@@ -102,8 +102,19 @@ export class LLMClient {
     }
 
     private providerError(message: AssistantMessage): Error {
-        const error = new Error(message.errorMessage ?? `Provider stopped with ${message.stopReason}`);
-        if (message.stopReason === 'aborted') error.name = 'AbortError';
-        return error;
+        return new ProviderStreamError(message);
+    }
+}
+
+/**
+ * Provider failure carrying the native pi-ai AssistantMessage. Retry classification uses
+ * {@link assistantMessage} with the SDK's isRetryableAssistantError instead of local
+ * error-string matching; errors without one (registry/auth/local validation failures) are
+ * deterministic and never retried.
+ */
+export class ProviderStreamError extends Error {
+    constructor(readonly assistantMessage: AssistantMessage) {
+        super(assistantMessage.errorMessage ?? `Provider stopped with ${assistantMessage.stopReason}`);
+        this.name = assistantMessage.stopReason === 'aborted' ? 'AbortError' : 'ProviderStreamError';
     }
 }
