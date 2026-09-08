@@ -4,6 +4,7 @@ import { HeadlessAdapter } from '../adapters/headlessAdapter';
 import type { IAgentAdapter } from '../adapters/interfaces';
 import { NotebookAdapter } from '../adapters/notebookAdapter';
 import {
+    canonicalReasoningEffortSetting,
     normalizeReasoningEffort,
     REASONING_EFFORT_SETTING_VALUES
 } from '../agent/types';
@@ -68,12 +69,12 @@ export async function handleSetReasoningEffort(req: Request, res: Response): Pro
         return;
     }
 
-    const reasoningEffort = req.body?.reasoning_effort;
-    if (typeof reasoningEffort !== 'string'
+    const reasoningEffort = canonicalReasoningEffortSetting(req.body?.reasoning_effort);
+    if (typeof req.body?.reasoning_effort !== 'string'
         || !REASONING_EFFORT_SETTING_VALUES.includes(reasoningEffort as any)) {
         res.status(400).json({
             status: 'error',
-            content: `Invalid reasoning_effort. Valid values: ${REASONING_EFFORT_SETTING_VALUES.join(', ')}`
+            content: `Invalid reasoning_effort. Valid values: ${REASONING_EFFORT_SETTING_VALUES.join(', ')} ('none' is accepted as a legacy alias of 'off')`
         });
         return;
     }

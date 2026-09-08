@@ -437,9 +437,74 @@
                             "models": {
                                 "type": "array",
                                 "items": {
-                                    "type": "string"
+                                    "anyOf": [
+                                        {
+                                            "type": "string"
+                                        },
+                                        {
+                                            "type": "object",
+                                            "required": [
+                                                "id"
+                                            ],
+                                            "properties": {
+                                                "id": {
+                                                    "type": "string"
+                                                },
+                                                "name": {
+                                                    "type": "string"
+                                                },
+                                                "reasoning": {
+                                                    "type": "boolean"
+                                                },
+                                                "input": {
+                                                    "type": "array",
+                                                    "minItems": 1,
+                                                    "items": {
+                                                        "enum": [
+                                                            "text",
+                                                            "image"
+                                                        ]
+                                                    }
+                                                },
+                                                "contextWindow": {
+                                                    "type": "integer",
+                                                    "minimum": 1
+                                                },
+                                                "maxTokens": {
+                                                    "type": "integer",
+                                                    "minimum": 1
+                                                },
+                                                "thinkingLevelMap": {
+                                                    "type": "object"
+                                                },
+                                                "compat": {
+                                                    "type": "object"
+                                                }
+                                            }
+                                        }
+                                    ]
                                 },
-                                "default": []
+                                "default": [],
+                                "markdownDescription": "%configuration.customProviders.models.markdownDescription%"
+                            },
+                            "capabilities": {
+                                "type": "object",
+                                "properties": {
+                                    "reasoning": {
+                                        "type": "boolean"
+                                    },
+                                    "input": {
+                                        "type": "array",
+                                        "minItems": 1,
+                                        "items": {
+                                            "enum": [
+                                                "text",
+                                                "image"
+                                            ]
+                                        }
+                                    }
+                                },
+                                "markdownDescription": "%configuration.customProviders.capabilities.markdownDescription%"
                             }
                         },
                         "required": [
@@ -688,7 +753,7 @@
         }
     },
     "scripts": {
-		"test": "vitest run",
+        "test": "vitest run",
         "vscode:prepublish": "npm run package",
         "compile": "npm run check-types && node esbuild.js",
         "check-types": "npx tsc --noEmit && npx tsc --noEmit -p tsconfig.renderer.json && npx tsc --noEmit -p tests/tsconfig.json",
@@ -699,7 +764,7 @@
         "package-local": "vsce package && npm install"
     },
     "devDependencies": {
-        "@earendil-works/pi-ai": "^0.82.1",
+        "@earendil-works/pi-ai": "^0.85.1",
         "@electron/rebuild": "^4.0.3",
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@types/better-sqlite3": "^7.6.13",

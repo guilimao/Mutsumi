@@ -16,6 +16,14 @@ export const RENDERER_CSS = `
   margin: 4px 0;
 }
 
+/* Muted token/cost footer under completed assistant content blocks */
+.mutsumi-usage-footer {
+  margin-top: 4px;
+  font-size: 0.85em;
+  opacity: 0.65;
+  user-select: none;
+}
+
 /* Themed container replacement for tool calls and reasoning */
 .mutsumi-block > details {
   background-color: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.15));

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { Usage } from '@earendil-works/pi-ai';
 import {
     AgentContext,
     AgentMessage,
@@ -12,7 +13,7 @@ import { ToolManager } from '../tools.d/toolManager';
 import { v4 as uuidv4 } from 'uuid';
 import { debugLogger } from '../debugLogger';
 import { resolveAgentDefaults } from '../config/resolver';
-import { RenderBlock, RenderData } from './renderTypes';
+import { RenderBlock, RenderData, toBlockUsage } from './renderTypes';
 import { GhostBlock } from '../contextManagement/interfaces';
 import { decodeGhostBlock } from '../contextManagement/ghostBlocks';
 import { t } from '../i18n';
@@ -238,16 +239,19 @@ function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent
 
     for (const m of group) {
         if (m.role === 'assistant') {
+            let lastUsageBlock: Extract<RenderBlock, { type: 'content' | 'toolCall' }> | undefined;
             for (const part of m.content) {
                 if (part.type === 'thinking' && part.thinking) {
                     blocks.push({ type: 'reasoning', markdown: part.thinking, collapsed: true });
                 } else if (part.type === 'text' && part.text) {
-                    blocks.push({ type: 'content', markdown: part.text });
+                    const block: RenderBlock = { type: 'content', markdown: part.text };
+                    blocks.push(block);
+                    lastUsageBlock = block;
                 } else if (part.type === 'toolCall') {
                     const result = toolResults.get(part.id);
                     const summary = ToolManager.getInstance().getPrettyPrint(part.name, part.arguments, isSubAgent);
                     const renderingConfig = ToolManager.getInstance().getToolRenderingConfig(part.name, isSubAgent);
-                    blocks.push({
+                    const block: RenderBlock = {
                         type: 'toolCall',
                         name: part.name,
                         args: part.arguments,
@@ -255,8 +259,15 @@ function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent
                         result: result ? serializeContentToString(result.content) : undefined,
                         isStreaming: false,
                         renderingConfig,
-                    });
+                    };
+                    blocks.push(block);
+                    lastUsageBlock = block;
                 }
+            }
+            // The persisted shape keeps usage loose; hydration validates it before any send.
+            const usage = toBlockUsage(m.usage as Usage | undefined);
+            if (usage && lastUsageBlock) {
+                lastUsageBlock.usage = usage;
             }
         }
     }

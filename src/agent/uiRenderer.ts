@@ -6,6 +6,7 @@
  */
 
 import { RenderBlock, RenderData } from '../notebook/renderTypes';
+import type { BlockUsage } from '../notebook/renderTypes';
 import type { ToolSet } from '../tools.d/toolManager';
 import type { ToolCall } from '@earendil-works/pi-ai';
 
@@ -76,11 +77,14 @@ export class UIRenderer {
      * @description Called after the stream completes (before tool execution).
      * Commits anything still active; the content/reasoning arguments serve as a
      * fallback for sections that never passed through updateActive. Per-round
-     * state is then reset for the next round.
+     * state is then reset for the next round. When usage is provided it is
+     * attached to the round's last committed content/tool block for display.
      * @param {string} content - Final accumulated content of the round
      * @param {string} reasoning - Final accumulated reasoning of the round
+     * @param {BlockUsage} [usage] - Token/cost of the assistant message that produced this round
      */
-    commitRoundUI(content: string, reasoning: string): void {
+    commitRoundUI(content: string, reasoning: string, usage?: BlockUsage): void {
+        const roundStart = this.committedBlocks.length;
         const pendingReasoning = this.reasoningLocked ? '' : (this.activeReasoning || reasoning);
         const pendingContent = this.contentLocked ? '' : (this.activeContent || content);
         if (pendingReasoning) {
@@ -92,6 +96,15 @@ export class UIRenderer {
         }
         if (pendingContent) {
             this.committedBlocks.push({ type: 'content', markdown: pendingContent });
+        }
+        if (usage) {
+            for (let i = this.committedBlocks.length - 1; i >= roundStart; i--) {
+                const block = this.committedBlocks[i];
+                if (block.type === 'content' || block.type === 'toolCall') {
+                    block.usage = usage;
+                    break;
+                }
+            }
         }
         this.reasoningLocked = false;
         this.contentLocked = false;

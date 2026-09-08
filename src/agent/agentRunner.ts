@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { ToolSet } from '../tools.d/toolManager';
 import { AgentMessage } from '../types';
 import { UIRenderer } from './uiRenderer';
-import { MUTSUMI_AGENT_CHAT_MIME, RenderBlock } from '../notebook/renderTypes';
+import { MUTSUMI_AGENT_CHAT_MIME, RenderBlock, toBlockUsage } from '../notebook/renderTypes';
 import { LLMStreamHandler } from './llmStream';
 import { ToolExecutor, type ToolExecutionResult } from './toolExecutor';
 import { TitleGenerator } from './titleGenerator';
@@ -203,10 +203,12 @@ export class AgentRunner {
             }
 
             if (toolCalls.length === 0) {
+                this.uiRenderer.commitRoundUI(roundContent, roundReasoning, toBlockUsage(assistantMessage.usage));
+                await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
                 break;
             }
 
-            this.uiRenderer.commitRoundUI(roundContent, roundReasoning);
+            this.uiRenderer.commitRoundUI(roundContent, roundReasoning, toBlockUsage(assistantMessage.usage));
 
             let result: ToolExecutionResult;
             try {

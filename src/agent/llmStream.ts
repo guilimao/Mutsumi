@@ -1,5 +1,6 @@
 /** Streaming UI projection over pi-ai's native assistant-message event protocol. */
 
+import { isRetryableAssistantError } from '@earendil-works/pi-ai';
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai';
 import { LLMClient } from './llmClient';
 import type { ToolDefinition } from '../tools.d/interface';
@@ -27,12 +28,14 @@ function visible(message: AssistantMessage): { content: string; reasoning: strin
     return { content: content.join(''), reasoning: reasoning.join(''), toolCalls };
 }
 
+/**
+ * SDK-based retry classification over the AssistantMessage attached by LLMClient.providerError.
+ * Errors without one (registry/auth/local validation failures) are deterministic and never retried.
+ */
 function isRetryableError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return [
-        'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN',
-        'socket hang up', 'network timeout', 'failed to fetch', 'disconnected', 'network error',
-    ].some(pattern => message.toLowerCase().includes(pattern.toLowerCase()));
+    const assistant = (error as { mutsumiAssistantMessage?: AssistantMessage } | null | undefined)
+        ?.mutsumiAssistantMessage;
+    return assistant !== undefined && isRetryableAssistantError(assistant);
 }
 
 function delay(ms: number): Promise<void> {

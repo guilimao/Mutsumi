@@ -4,8 +4,8 @@
  */
 
 import * as vscode from 'vscode';
-import { normalizeReasoningEffort, REASONING_EFFORT_SETTING_VALUES } from '../../agent/types';
-import type { ReasoningEffortSetting } from '../../agent/types';
+import { normalizeReasoningEffort } from '../../agent/types';
+import type { ReasoningEffort, ReasoningEffortSetting } from '../../agent/types';
 import { LlmProviderService } from '../../llm/providerService';
 import { t } from '../../i18n';
 
@@ -32,7 +32,7 @@ type SelectModelQuickPickItem = ModelQuickPickItem | ReasoningEffortQuickPickIte
 
 /** Human-readable descriptions for concrete reasoning effort levels. */
 const reasoningEffortDescriptions: Readonly<Record<Exclude<ReasoningEffortSetting, 'default'>, string>> = {
-    none: t('selectModel.effort.none'),
+    off: t('selectModel.effort.off'),
     minimal: t('selectModel.effort.minimal'),
     low: t('selectModel.effort.low'),
     medium: t('selectModel.effort.medium'),
@@ -116,7 +116,7 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
                 return;
             }
 
-            let supportedEfforts: readonly string[] = [];
+            let supportedEfforts: readonly ReasoningEffort[] = [];
             if (currentModel && currentProvider) {
                 try {
                     supportedEfforts = providerService.resolveSelection({
@@ -127,9 +127,9 @@ export function registerSelectModelCommand(context: vscode.ExtensionContext): vo
                     supportedEfforts = [];
                 }
             }
-            const effortValues = REASONING_EFFORT_SETTING_VALUES.filter(
-                value => value === 'default' || supportedEfforts.includes(value)
-            );
+            // Effort items are derived from the current model's SDK-reported levels
+            // (docs/reasoning-effort-target-state.md D8): 'default' plus getSupportedThinkingLevels.
+            const effortValues: readonly ReasoningEffortSetting[] = ['default', ...supportedEfforts];
             const effortItems: ReasoningEffortQuickPickItem[] = effortValues.map(value => ({
                 itemType: 'reasoningEffort',
                 value,

@@ -62,7 +62,7 @@ describe('LlmProviderService registry', () => {
         await expect(service.initialize(context())).rejects.toThrow(message);
     });
 
-    it('normalizes custom routes and applies conservative manual model defaults', async () => {
+    it('normalizes custom routes and applies optimistic undeclared capability defaults', async () => {
         vscodeState.profiles = {
             local: {
                 displayName: ' Local ', baseUrl: 'http://localhost:8080/v1/',
@@ -72,7 +72,76 @@ describe('LlmProviderService registry', () => {
         const service = new LlmProviderService();
         await service.initialize(context());
         const model = service.getModel('local', 'test-model');
-        expect(model).toMatchObject({ contextWindow: 262144, maxTokens: 32768, input: ['text'] });
+        expect(model).toMatchObject({
+            contextWindow: 262144, maxTokens: 32768,
+            // Unknown capabilities are optimistic, not unsupported (C1).
+            reasoning: true, input: ['text', 'image'],
+            compat: { supportsDeveloperRole: false },
+        });
+        expect(service.listModels('local')[0].reasoningEfforts).toContain('off');
+        expect(service.listModels('local')[0].reasoningEfforts).toContain('high');
+    });
+
+    it('resolves declared capabilities with spec over provider defaults', async () => {
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'http://localhost:8080/v1', auth: 'none',
+                capabilities: { reasoning: false, input: ['text'] },
+                models: [
+                    'plain-string-model',
+                    { id: 'spec-model', reasoning: true, input: ['text'], contextWindow: 4096, maxTokens: 512 },
+                ],
+            },
+        };
+        const service = new LlmProviderService();
+        await service.initialize(context());
+        expect(service.getModel('local', 'plain-string-model')).toMatchObject({
+            reasoning: false, input: ['text'], contextWindow: 262144,
+        });
+        expect(service.getModel('local', 'spec-model')).toMatchObject({
+            reasoning: true, input: ['text'], contextWindow: 4096, maxTokens: 512,
+        });
+        expect(service.listModels('local').find(model => model.id === 'plain-string-model')?.reasoningEfforts)
+            .toEqual([]);
+    });
+
+    it.each([
+        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: '' }] } }, 'non-empty id'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', reasoning: 'yes' }] } }, 'reasoning must be a boolean'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', input: ['video'] }] } }, 'subset of'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', contextWindow: 0 }] } }, 'positive integer'],
+        [{ local: { baseUrl: 'https://example.test/v1', capabilities: { reasoning: 1 } } }, 'must be a boolean'],
+    ])('rejects invalid capability declarations (%j)', async (profiles, message) => {
+        vscodeState.profiles = profiles;
+        const service = new LlmProviderService();
+        await expect(service.initialize(context())).rejects.toThrow(message);
+    });
+
+    it('keeps declared specs authoritative over discovered listing entries on refresh', async () => {
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none',
+                models: [{ id: 'discovered-model', reasoning: false, input: ['text'] }, 'declared-only-model'],
+            },
+        };
+        const service = new LlmProviderService();
+        await service.initialize(context());
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+            data: [
+                { id: 'discovered-model', context_window: 8192 },
+                { id: 'server-extra-model' },
+            ],
+        }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+        await service.refreshModels();
+
+        // Discovered entry keeps its server-provided numbers but the declared spec wins on capabilities.
+        expect(service.getModel('local', 'discovered-model')).toMatchObject({
+            reasoning: false, input: ['text'], contextWindow: 8192,
+        });
+        // Declared-only and server-extra models both survive the merge.
+        expect(service.getModel('local', 'declared-only-model').id).toBe('declared-only-model');
+        expect(service.getModel('local', 'server-extra-model')).toMatchObject({ reasoning: true, input: ['text', 'image'] });
     });
 
     it('uses built-in ambient environment credentials as a SecretStorage fallback', async () => {

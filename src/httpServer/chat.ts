@@ -29,7 +29,7 @@ export async function handleChat(
     const body = req.body ?? {};
     const { prompt, model, provider, stream } = body;
     const hasReasoningEffort = Object.prototype.hasOwnProperty.call(body, 'reasoning_effort');
-    const bodyReasoningEffort = body.reasoning_effort;
+    const bodyReasoningEffort = body.reasoning_effort === 'none' ? 'off' : body.reasoning_effort;
     const isStreamMode = stream === true;
 
     if (!uuid) {

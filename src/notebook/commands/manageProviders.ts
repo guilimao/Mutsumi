@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { AuthEvent, AuthInteraction, AuthPrompt } from '@earendil-works/pi-ai';
 import { LlmProviderService } from '../../llm/providerService';
-import type { CustomProviderProfile, ProviderInfo } from '../../llm/types';
+import type { CustomModelSpec, CustomProviderProfile, ProviderInfo } from '../../llm/types';
 import { t } from '../../i18n';
 
 interface ProviderPick extends vscode.QuickPickItem {
@@ -85,21 +85,28 @@ async function updateCustomProvider(id: string, existing?: CustomProviderProfile
     const manualModels = await vscode.window.showInputBox({
         title: t('providers.manualModels'),
         prompt: t('providers.manualModelsPrompt'),
-        value: (existing?.models ?? []).join(', '),
+        // Only string-form entries are editable here; capability-declaring specs from
+        // settings JSON are preserved verbatim on write-back (docs/custom-model-capabilities.md C7).
+        value: (existing?.models ?? []).filter((model): model is string => typeof model === 'string').join(', '),
         ignoreFocusOut: true,
     });
     if (manualModels === undefined) return false;
 
+    const declaredSpecs = (existing?.models ?? []).filter((model): model is CustomModelSpec => typeof model !== 'string');
     const config = vscode.workspace.getConfiguration('mutsumi');
     const profiles = config.get<Record<string, CustomProviderProfile>>('customProviders', {});
     await config.update('customProviders', {
         ...profiles,
         [id]: {
+            ...existing,
             displayName: displayName.trim() || id,
             baseUrl: baseUrl.trim(),
             api: api.value,
             auth: auth.value,
-            models: [...new Set(manualModels.split(',').map(model => model.trim()).filter(Boolean))],
+            models: [
+                ...declaredSpecs,
+                ...new Set(manualModels.split(',').map(model => model.trim()).filter(Boolean)),
+            ],
         },
     }, vscode.ConfigurationTarget.Global);
     const service = LlmProviderService.getInstance();
