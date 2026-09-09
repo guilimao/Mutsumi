@@ -4,6 +4,7 @@ import type { Api, AssistantMessage } from '@earendil-works/pi-ai';
 const state = vi.hoisted(() => ({
     api: 'openai-completions' as Api,
     isBuiltIn: false,
+    modelOverrides: {} as Record<string, unknown>,
     captured: undefined as any,
     streamError: undefined as AssistantMessage | undefined,
 }));
@@ -11,7 +12,7 @@ vi.mock('../src/llm/providerService', () => ({
     LlmProviderService: {
         getInstance: () => ({
             prepare: (provider: string, model: string) => ({
-                model: { provider, id: model },
+                model: { provider, id: model, ...state.modelOverrides },
                 isBuiltIn: state.isBuiltIn,
                 models: {
                     streamSimple: (_model: unknown, context: unknown, options: unknown) => {
@@ -81,6 +82,31 @@ describe('reasoning capability gate', () => {
         expect(error?.message).toMatch(/built-in model capabilities come from the pi-ai catalog/);
         expect(error?.message).not.toMatch(/mutsumi\.customProviders/);
         state.isBuiltIn = false;
+    });
+
+    it('rejects off when the model cannot disable reasoning instead of letting the SDK raise it', async () => {
+        state.isBuiltIn = false;
+        // thinkingLevelMap.off = null removes off from getSupportedThinkingLevels; the SDK would
+        // clamp the request upward to minimal, silently turning "disable" into "enable".
+        state.modelOverrides = { reasoning: true, thinkingLevelMap: { off: null } };
+        try {
+            const client = new LLMClient({ provider: 'local', model: 'no-off', reasoningEffort: 'off' });
+            await expect(client.chatCompletion({ messages: [] })).rejects.toThrow(/cannot disable reasoning/);
+        } finally {
+            state.modelOverrides = {};
+        }
+    });
+
+    it('still sends off when the model supports disabling reasoning', async () => {
+        state.isBuiltIn = false;
+        state.modelOverrides = { reasoning: true };
+        try {
+            const client = new LLMClient({ provider: 'local', model: 'm', reasoningEffort: 'off' });
+            for await (const _chunk of client.streamChatCompletion({ messages: [] })) { /* consume */ }
+            expect(state.captured.options).toMatchObject({ reasoning: 'off' });
+        } finally {
+            state.modelOverrides = {};
+        }
     });
 });
 

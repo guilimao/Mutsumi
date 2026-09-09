@@ -84,14 +84,25 @@ export class LLMClient {
      * a model that declares no reasoning would otherwise have its effort value clamped away
      * silently by the SDK. Unknown vocabulary is rejected here too — the SDK would clamp unknown
      * levels to the first supported one during request building, so they can never reach the
-     * server for a provider 400. Partial thinkingLevelMap gaps (incl. xhigh/max without a
-     * declared map on reasoning-capable models) stay with the SDK's clamping, matching how SDK
-     * catalog models behave; QuickPick only offers getSupportedThinkingLevels members.
+     * server for a provider 400. `off` is checked as well (docs/reasoning-effort-target-state.md
+     * D6 v1.5): when a model's thinkingLevelMap disables `off`, the SDK clamps it *upward* to the
+     * first available level, turning a request to disable reasoning into one that enables it.
+     * Partial thinkingLevelMap gaps (incl. xhigh/max without a declared map on reasoning-capable
+     * models) stay with the SDK's clamping, matching how SDK catalog models behave; QuickPick
+     * only offers getSupportedThinkingLevels members.
      */
     private assertReasoningSupported(model: Model<Api>, isBuiltIn: boolean): void {
         const effort = this.reasoningEffort;
-        if (effort === undefined || effort === 'off') return;
+        if (effort === undefined) return;
         if (getSupportedThinkingLevels(model).includes(effort as ModelThinkingLevel)) return;
+        if (effort === 'off') {
+            const remedy = isBuiltIn
+                ? 'Remove the reasoning effort override; built-in model capabilities come from the pi-ai catalog and cannot be redeclared.'
+                : 'Remove the reasoning effort override, or drop the thinkingLevelMap entry that disables "off" for this model in mutsumi.customProviders.';
+            throw new Error(
+                `Reasoning effort "off" is set, but ${model.provider}/${model.id} cannot disable reasoning. ${remedy}`,
+            );
+        }
         if (!MODEL_THINKING_LEVELS.includes(effort as ReasoningEffort)) {
             throw new Error(`Unsupported reasoning effort "${effort}"`);
         }
