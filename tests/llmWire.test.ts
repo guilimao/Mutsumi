@@ -82,9 +82,9 @@ async function startLoopback(responseBodyFor: (path: string) => string) {
     return { server, requests, baseUrl: `http://127.0.0.1:${port}/v1` };
 }
 
-function seedRegistry(baseUrl: string) {
+function seedRegistry(baseUrl: string, models: unknown[] = ['wire-model']) {
     vscodeState.profiles = {
-        [PROVIDER_ID]: { baseUrl, auth: 'apiKey', models: ['wire-model'] },
+        [PROVIDER_ID]: { baseUrl, auth: 'apiKey', models },
     };
     return seedSecretContext();
 }
@@ -294,6 +294,37 @@ describe('LLM wire payload (real SDK conversion over loopback HTTP)', () => {
         expect(wireContent).toEqual([
             { type: 'text', text: 'look' },
             { type: 'image_url', image_url: { url: 'data:image/png;base64,aGk=' } },
+        ]);
+    });
+
+    it('omits images on the wire when the model declares text-only input', async () => {
+        const loopback = await startLoopback(() => sseResponse([
+            textChunk({ role: 'assistant', content: 'seen' }),
+            textChunk({}, 'stop'),
+        ]));
+        activeServer = loopback.server;
+        await LlmProviderService.getInstance().initialize(
+            seedRegistry(loopback.baseUrl, [{ id: 'wire-model', input: ['text'] }]),
+        );
+
+        const client = new LLMClient({ provider: PROVIDER_ID, model: 'wire-model' });
+        await streamOnce(client, {
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'look' },
+                    { type: 'image', mimeType: 'image/png', data: 'aGk=' },
+                ],
+                timestamp: 1,
+            }],
+        });
+
+        // Declared text-only input restores the pre-optimistic behavior: the SDK downgrades the
+        // image to its omission placeholder instead of sending an image part.
+        const wireContent = lastRequest(loopback).body.messages[0].content;
+        expect(wireContent).toEqual([
+            { type: 'text', text: 'look' },
+            { type: 'text', text: '(image omitted: model does not support images)' },
         ]);
     });
 
