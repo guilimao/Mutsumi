@@ -99,12 +99,13 @@ export class LlmProviderService {
         // pi-ai restores the persisted discovery cache over the declared baseline by id, so a
         // profile edit would otherwise stay shadowed until a successful network refresh — across
         // restarts too, because the cache lives in globalState. Compare the persisted profile
-        // fingerprint and drop the cache when the fields that shape Model objects change.
+        // fingerprint and drop the cache when the fields that shape Model objects change. A
+        // missing fingerprint also counts as changed: catalogs persisted before fingerprints
+        // existed (extension upgrade) would otherwise survive with their stale Model objects.
         for (const [id, profile] of customProfiles) {
             const fingerprint = profileFingerprint(profile);
             const previous = await modelsStore.readProfileFingerprint(id);
-            if (previous === fingerprint) continue;
-            if (previous !== undefined) await modelsStore.delete(id);
+            if (previous !== fingerprint) await modelsStore.delete(id);
             await modelsStore.writeProfileFingerprint(id, fingerprint);
         }
         const models = createModels({ credentials, modelsStore });

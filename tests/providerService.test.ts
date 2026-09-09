@@ -198,6 +198,35 @@ describe('LlmProviderService registry', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    it('drops a catalog cached before profile fingerprints existed (upgrade path)', async () => {
+        const globalState = new MemoryMemento();
+        // Upgrade scenario: the discovery cache key exists from an older extension version, the
+        // fingerprint key introduced with the invalidation fix does not. A "no fingerprint" cache
+        // must be treated as changed, not as unchanged.
+        globalState.values.set('mutsumi.llmModels.v1.local', {
+            checkedAt: 1,
+            models: [{
+                id: 'discovered-model', name: 'stale', api: 'openai-completions', provider: 'local',
+                baseUrl: 'https://example.test/v1', reasoning: false, input: ['text'],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 8192, maxTokens: 1024,
+            }],
+        });
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none',
+                models: [{ id: 'discovered-model', reasoning: true }],
+            },
+        };
+
+        const service = new LlmProviderService();
+        await service.initialize({ secrets: new MemorySecrets(), globalState } as any);
+
+        // The restored stale entry (reasoning: false) must not shadow the declaration.
+        expect(service.getModel('local', 'discovered-model').reasoning).toBe(true);
+        expect(globalState.values.get('mutsumi.llmModels.v1.local')).toBeUndefined();
+    });
+
     it('invalidates the cache on api or model-list changes, not only capability specs', async () => {
         const globalState = new MemoryMemento();
         const restartContext = () => ({ secrets: new MemorySecrets(), globalState }) as any;
