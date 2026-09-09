@@ -4,6 +4,7 @@
  */
 
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
+import { MODEL_THINKING_LEVELS } from '../llm/thinkingLevels';
 import type { AgentStateInfo, AgentRuntimeStatus } from '../types';
 import type { AgentMessage } from '../types';
 
@@ -18,23 +19,17 @@ export type ReasoningEffortSetting = ReasoningEffort | 'default';
 
 /**
  * Supported reasoning effort setting values in display order.
- * @remarks QuickPick and HTTP validation import this constant directly as the single source of truth.
- * The concrete levels are typed against the SDK union, so vocabulary drift on SDK upgrades fails type-check.
+ * @remarks Single source of truth for the QuickPick and HTTP validation. The concrete levels are
+ * derived from {@link MODEL_THINKING_LEVELS}, whose exhaustive Record turns SDK vocabulary drift
+ * (added or removed levels) into a compile error.
  */
 export const REASONING_EFFORT_SETTING_VALUES: readonly ReasoningEffortSetting[] = [
     'default',
-    'off',
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max'
+    ...MODEL_THINKING_LEVELS
 ];
 
-/** Concrete levels derived from the single source of truth above (no 'default' sentinel). */
-export const MODEL_THINKING_LEVELS: readonly ReasoningEffort[] =
-    REASONING_EFFORT_SETTING_VALUES.filter((value): value is ReasoningEffort => value !== 'default');
+/** Re-exported so agent-side consumers keep importing the vocabulary from one module. */
+export { MODEL_THINKING_LEVELS } from '../llm/thinkingLevels';
 
 /** Pre-v1.3 persisted vocabulary; mapped on read so legacy `.mtm` files keep working. */
 const LEGACY_REASONING_EFFORT_ALIASES: Readonly<Record<string, ReasoningEffort>> = {

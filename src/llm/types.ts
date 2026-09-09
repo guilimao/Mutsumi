@@ -15,9 +15,9 @@ export interface CustomModelSpec {
     input?: ('text' | 'image')[];
     contextWindow?: number;
     maxTokens?: number;
-    /** Advanced: pi-ai thinkingLevelMap passthrough (level -> provider value, null = unsupported). */
+    /** Advanced: pi-ai thinkingLevelMap passthrough; keys must be pi-ai levels, values stay opaque. */
     thinkingLevelMap?: ThinkingLevelMap;
-    /** Advanced: pi-ai compat flag passthrough; unspecified fields keep URL-detected defaults. */
+    /** Advanced opaque passthrough of pi-ai compat flags; unspecified fields keep URL-detected defaults. */
     compat?: Partial<OpenAICompletionsCompat> & Partial<OpenAIResponsesCompat>;
 }
 

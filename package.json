@@ -475,10 +475,29 @@
                                                     "minimum": 1
                                                 },
                                                 "thinkingLevelMap": {
-                                                    "type": "object"
+                                                    "type": "object",
+                                                    "markdownDescription": "%configuration.customProviders.models.thinkingLevelMap.markdownDescription%",
+                                                    "propertyNames": {
+                                                        "enum": [
+                                                            "off",
+                                                            "minimal",
+                                                            "low",
+                                                            "medium",
+                                                            "high",
+                                                            "xhigh",
+                                                            "max"
+                                                        ]
+                                                    },
+                                                    "additionalProperties": {
+                                                        "type": [
+                                                            "string",
+                                                            "null"
+                                                        ]
+                                                    }
                                                 },
                                                 "compat": {
-                                                    "type": "object"
+                                                    "type": "object",
+                                                    "markdownDescription": "%configuration.customProviders.models.compat.markdownDescription%"
                                                 }
                                             }
                                         }

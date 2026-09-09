@@ -34,7 +34,9 @@ Mutsumi 只做透传，不做任何 provider 特化。
 type ReasoningEffort = ModelThinkingLevel;   // = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 // 用户可配置的全集（含"不发送"语义）
 type ReasoningEffortSetting = ReasoningEffort | 'default';
-// 单一事实源常量，供 QuickPick / HTTP 校验 / package.json enum 对齐（类型标注跟随 SDK，升级时漂移可被 TS 捕获）
+// 单一事实源常量，供 QuickPick / HTTP 校验 / package.json enum 对齐。档位顺序与集合来自
+// `src/llm/thinkingLevels.ts` 的 exhaustive `Record<ModelThinkingLevel, number>`：SDK 增删档位时编译失败，
+// 而非依赖数组字面量（数组只对“删除”敏感，新增档位不会被发现）。
 const REASONING_EFFORT_SETTING_VALUES: readonly ReasoningEffortSetting[];
 
 // 归一化规则：'default' | '' | undefined → undefined（不发送字段）

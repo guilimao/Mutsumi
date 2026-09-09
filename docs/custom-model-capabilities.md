@@ -72,9 +72,11 @@ SDK **不解析**自定义 `/models` 列表的能力字段（该列表只承诺 
 - `displayName` 必须是字符串；`reasoning` 必须 boolean；`input` 必须是 `('text' | 'image')[]`
   非空子集（去重）。
 - `contextWindow` / `maxTokens` 必须正整数。
-- `thinkingLevelMap` / `compat` 做结构浅校验后原样透传（不做语义翻译，C6）。compat 值允许
-  boolean/string/number 及 plain object（SDK compat 接口含 `chatTemplateArgs`/`openRouterRouting`
-  等嵌套对象旗标）；数组与 null 不在任何 SDK compat 字段形状内，拒绝。
+- `thinkingLevelMap` 的 key 必须是 `ModelThinkingLevel`（未知 key 会静默失效，故报错）；value 必须是 string 或 null，
+  原样透传（不做语义翻译，C6）。
+- `compat` 是**不透明高级透传**：只校验容器是普通对象，key 与嵌套内容一律不解释。SDK 的 compat 接口包含
+  嵌套对象、字符串数组与 null（`chatTemplateArgs` / `openRouterRouting.order` 等），在本地镜像这些形状只会在
+  SDK 升级时腐烂；未知 key 有意放行以保持前向兼容。字段语义完全以 SDK 为准。
 - provider 级 `capabilities` 与模型级同构（不含 id/name/数值外的字段）。
 
 ## 4. SDK 升级评估位（D-B 决策跟踪）
@@ -96,6 +98,7 @@ SDK **不解析**自定义 `/models` 列表的能力字段（该列表只承诺 
 
 ## 5. 受影响面
 
+- `src/llm/thinkingLevels.ts` — SDK 档位词汇与顺序的单一事实源（exhaustive `Record`，SDK 增删档位时编译失败）
 - `src/llm/types.ts` — `CustomModelSpec` / `CustomProviderProfile.capabilities`
 - `src/llm/providerService.ts` — `customModel()` 优先级合并、`discoverCustomModels()` 声明覆盖合并（C4）、
   `validateProfiles()` 双形态校验、声明指纹失效（C8）

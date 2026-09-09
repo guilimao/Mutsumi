@@ -19,6 +19,7 @@ import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses';
 import type { ModelSelection } from '../types';
 import { VsCodeCredentialStore } from './credentialStore';
 import { VsCodeModelsStore } from './modelStore';
+import { isModelThinkingLevel } from './thinkingLevels';
 import type { CustomModelSpec, CustomProviderCapabilities, CustomProviderProfile, ModelInfo, ProviderInfo } from './types';
 
 const DEFAULT_CONTEXT_WINDOW = 262_144;
@@ -352,23 +353,30 @@ export class LlmProviderService {
                 normalized.maxTokens = spec.maxTokens;
             }
             if (spec.thinkingLevelMap !== undefined) {
-                if (!spec.thinkingLevelMap || typeof spec.thinkingLevelMap !== 'object' || Array.isArray(spec.thinkingLevelMap)
-                    || Object.values(spec.thinkingLevelMap).some(value => value !== null && typeof value !== 'string')) {
-                    throw new Error(`Custom provider "${id}" model "${modelId}" thinkingLevelMap must map levels to strings or null`);
+                const map = spec.thinkingLevelMap;
+                if (!map || typeof map !== 'object' || Array.isArray(map)) {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" thinkingLevelMap must be an object`);
                 }
-                normalized.thinkingLevelMap = spec.thinkingLevelMap as CustomModelSpec['thinkingLevelMap'];
+                // Keys are Mutsumi's own vocabulary (the SDK level names); values stay opaque
+                // passthrough (C6). An unknown key would otherwise be silently inert.
+                for (const [level, value] of Object.entries(map as Record<string, unknown>)) {
+                    if (!isModelThinkingLevel(level)) {
+                        throw new Error(`Custom provider "${id}" model "${modelId}" thinkingLevelMap has unknown level "${level}"`);
+                    }
+                    if (value !== null && typeof value !== 'string') {
+                        throw new Error(`Custom provider "${id}" model "${modelId}" thinkingLevelMap.${level} must be a string or null`);
+                    }
+                }
+                normalized.thinkingLevelMap = map as CustomModelSpec['thinkingLevelMap'];
             }
             if (spec.compat !== undefined) {
-                // Shallow passthrough (C6): the SDK's compat interfaces carry nested object
-                // flags (chatTemplateArgs / chatTemplateKwargs / openRouterRouting / ...), so
-                // plain objects are accepted alongside primitives; arrays and null are not part
-                // of any SDK compat field shape and stay rejected.
-                const validCompatValue = (value: unknown): boolean =>
-                    typeof value === 'boolean' || typeof value === 'string' || typeof value === 'number'
-                    || (value !== null && typeof value === 'object' && !Array.isArray(value));
-                if (!spec.compat || typeof spec.compat !== 'object' || Array.isArray(spec.compat)
-                    || Object.values(spec.compat).some(value => !validCompatValue(value))) {
-                    throw new Error(`Custom provider "${id}" model "${modelId}" compat must map flag names to booleans, strings, numbers, or plain objects`);
+                // Opaque advanced passthrough (C6): only the container shape is checked. Key names
+                // and nested values belong to the SDK's compat interfaces, which carry nested
+                // objects, string arrays and nulls; mirroring those shapes here would rot on every
+                // SDK upgrade, and a partial check that lets unknown keys through anyway is worse
+                // than an explicit passthrough contract.
+                if (!spec.compat || typeof spec.compat !== 'object' || Array.isArray(spec.compat)) {
+                    throw new Error(`Custom provider "${id}" model "${modelId}" compat must be an object`);
                 }
                 normalized.compat = spec.compat as CustomModelSpec['compat'];
             }

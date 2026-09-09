@@ -42,6 +42,8 @@
 	"configuration.title": "Mutsumi",
 	"configuration.customProviders.markdownDescription": "Non-secret custom OpenAI-compatible provider routes. Configure API keys with **Mutsumi: Manage Model Providers**; never place keys here.",
 	"configuration.customProviders.models.markdownDescription": "Model IDs as strings, or objects declaring per-model capabilities (`reasoning`, `input`, `contextWindow`, `maxTokens`, `thinkingLevelMap`, `compat`). Undeclared capabilities default to optimistic (`reasoning: true`, `input: [\"text\", \"image\"]`); see `docs/custom-model-capabilities.md`.",
+	"configuration.customProviders.models.thinkingLevelMap.markdownDescription": "Advanced: pi-ai thinkingLevelMap passthrough. Keys must be pi-ai levels (`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`); values are provider strings, or `null` when the level is unsupported.",
+	"configuration.customProviders.models.compat.markdownDescription": "Advanced opaque passthrough of pi-ai compat flags. Only the object shape is checked; keys and nested values are interpreted by the SDK, not by Mutsumi.",
 	"configuration.customProviders.capabilities.markdownDescription": "Provider-wide capability defaults (`reasoning`, `input`) applied beneath per-model declarations. Undeclared means optimistic.",
 	"configuration.defaultModel.markdownDescription": "Default `{ provider, model }` selection. Configure credentials and browse supported models with **Mutsumi: Manage Model Providers**.",
 	"configuration.titleGeneratorModel.markdownDescription": "Model selection used for generating agent titles. Must be an object with `model` and `provider`. If empty, falls back to the session metadata pair.",

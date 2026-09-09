@@ -111,7 +111,9 @@ describe('LlmProviderService registry', () => {
         [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', input: ['video'] }] } }, 'subset of'],
         [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', contextWindow: 0 }] } }, 'positive integer'],
         [{ local: { baseUrl: 'https://example.test/v1', capabilities: { reasoning: 1 } } }, 'must be a boolean'],
-        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', compat: { nested: [] } }] } }, 'compat must map'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', compat: [] }] } }, 'compat must be an object'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', thinkingLevelMap: { medum: null } }] } }, 'unknown level "medum"'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', thinkingLevelMap: { off: true } }] } }, 'thinkingLevelMap.off must be a string or null'],
         [{ local: { baseUrl: 'https://example.test/v1', models: 'gpt' } }, 'models must be an array'],
         [{ local: { baseUrl: 'https://example.test/v1', models: {} } }, 'models must be an array'],
         [{ local: { baseUrl: 'https://example.test/v1', displayName: 123 } }, 'displayName must be a string'],
@@ -121,12 +123,13 @@ describe('LlmProviderService registry', () => {
         await expect(service.initialize(context())).rejects.toThrow(message);
     });
 
-    it('accepts nested-object compat flags as SDK passthrough (C6)', async () => {
+    it('accepts nested-object compat flags and level maps as SDK passthrough (C6)', async () => {
         vscodeState.profiles = {
             local: {
                 baseUrl: 'https://example.test/v1', auth: 'none',
                 models: [{
                     id: 'chat-template-model',
+                    thinkingLevelMap: { off: null, high: 'high' },
                     compat: {
                         supportsDeveloperRole: true,
                         chatTemplateArgs: { enable_thinking: { $var: 'thinking.enabled' } },
@@ -137,6 +140,7 @@ describe('LlmProviderService registry', () => {
         const service = new LlmProviderService();
         await service.initialize(context());
         const model = service.getModel('local', 'chat-template-model');
+        expect(model.thinkingLevelMap).toEqual({ off: null, high: 'high' });
         expect(model.compat).toMatchObject({
             supportsDeveloperRole: true,
             chatTemplateArgs: { enable_thinking: { $var: 'thinking.enabled' } },
