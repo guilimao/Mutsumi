@@ -16,11 +16,10 @@ export const MUTSUMI_AGENT_CHAT_MIME = 'application/vnd.mutsumi.agent-chat';
 
 /**
  * Serializable token/cost footer projected from pi-ai's AssistantMessage.usage.
- * @description Displayed at most once per assistant round; the block that carries it
- * follows the attach rule shared by the live path (UIRenderer.commitRoundUI/appendBlock)
- * and .mtm hydration (serializer.buildInteractionRenderBlocks): content rounds badge the
- * round's content block, tool rounds badge the round's FIRST tool block, reasoning-only
- * rounds show no badge.
+ * @description Rendered as a standalone `usage` block appended once per assistant round by
+ * both the live path (UIRenderer.commitRoundUI/appendUsage) and .mtm hydration
+ * (serializer.buildInteractionRenderBlocks). Content, tool, and reasoning-only rounds all get
+ * the same footer, so no attach rule has to be mirrored between the two paths.
  */
 export interface BlockUsage {
     input: number;
@@ -55,13 +54,17 @@ export function toBlockUsage(usage: Usage | undefined): BlockUsage | undefined {
 
 /**
  * A single renderable unit of agent output.
- * @description Discriminated union over the three kinds of output the agent
- * produces: markdown content, collapsible reasoning, and tool calls.
+ * @description Discriminated union over the kinds of output the agent produces: markdown
+ * content, collapsible reasoning, tool calls, and the round's token/cost footer. A `usage`
+ * block follows the blocks of the assistant round it belongs to; it is committed when the
+ * round commits, which is before that round's tool blocks (those are appended as each tool
+ * finishes), because the usage belongs to the assistant message, not to the tool results.
  * Blocks in {@link RenderData.committed} are locked and never re-rendered.
  */
 export type RenderBlock =
-    | { type: 'content'; markdown: string; usage?: BlockUsage }
+    | { type: 'content'; markdown: string }
     | { type: 'reasoning'; markdown: string; collapsed: boolean }
+    | { type: 'usage'; usage: BlockUsage }
     | {
         type: 'toolCall';
         /** Tool name (e.g. 'read') */
@@ -74,8 +77,6 @@ export type RenderBlock =
         result?: string;
         /** Whether this tool call is still streaming (pending) */
         isStreaming: boolean;
-        /** Token/cost of the assistant round that issued this call, once known */
-        usage?: BlockUsage;
         /** Optional hints for rendering arguments as code blocks */
         renderingConfig?: {
             /** Argument names to render as fenced code blocks */

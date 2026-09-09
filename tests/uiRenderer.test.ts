@@ -1,8 +1,7 @@
 /**
- * UIRenderer usage-attach semantics. Committed blocks are rendered once and never
- * re-rendered, so a round's token/cost usage must be present on the block's FIRST
- * committed frame: either on content committed by commitRoundUI (terminal content
- * round) or on the first tool block appended afterwards by the round's tool execution.
+ * UIRenderer usage semantics. Each assistant round's token/cost is committed as its own
+ * `usage` block, so content, tool, and reasoning-only rounds all render the same footer and
+ * no cross-module attach rule has to be mirrored by .mtm hydration.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -25,48 +24,51 @@ function toolBlock(name: string): RenderBlock {
     };
 }
 
-describe('UIRenderer usage attach', () => {
-    it('attaches usage to content committed by commitRoundUI (terminal content round)', () => {
+describe('UIRenderer usage blocks', () => {
+    it('appends the round usage block after committed content', () => {
         const renderer = new UIRenderer();
         renderer.updateActive('all done', '', []);
         renderer.commitRoundUI('all done', '', usage);
         const data = renderer.getCommittedRenderData();
         expect(data.committed).toEqual([
-            expect.objectContaining({ type: 'content', markdown: 'all done', usage }),
+            expect.objectContaining({ type: 'content', markdown: 'all done' }),
+            { type: 'usage', usage },
         ]);
     });
 
-    it('carries usage to the first tool block appended after a tool round', () => {
+    it('emits the usage block of a tool round before the tool blocks it owns', () => {
         const renderer = new UIRenderer();
         // Tool round: nothing was pending at commit time (no content/reasoning to commit).
         renderer.commitRoundUI('', '', usage);
         renderer.appendBlock(toolBlock('read'));
         renderer.appendBlock(toolBlock('write'));
         const data = renderer.getCommittedRenderData();
-        expect((data.committed[0] as { usage?: unknown }).usage).toEqual(usage);
-        // One badge per round: later blocks of the same round stay clean.
-        expect((data.committed[1] as { usage?: unknown }).usage).toBeUndefined();
+        // The usage belongs to the assistant message that issued the calls; the round's tool
+        // blocks are appended later, during tool execution.
+        expect(data.committed.map(block => block.type)).toEqual(['usage', 'toolCall', 'toolCall']);
     });
 
-    it('does not double-attach when the round already committed a content block', () => {
-        const renderer = new UIRenderer();
-        renderer.commitRoundUI('done', '', usage);
-        renderer.appendBlock(toolBlock('read'));
-        const data = renderer.getCommittedRenderData();
-        expect((data.committed[0] as { usage?: unknown }).usage).toEqual(usage);
-        expect((data.committed[1] as { usage?: unknown }).usage).toBeUndefined();
-    });
-
-    it('clears pending usage when the next round commits without usage', () => {
+    it('emits one usage block per round and none without usage', () => {
         const renderer = new UIRenderer();
         renderer.commitRoundUI('', '', usage);
         renderer.commitRoundUI('second', '', undefined);
         renderer.appendBlock(toolBlock('read'));
         const data = renderer.getCommittedRenderData();
-        // The pending usage from the first (tool) round must not leak onto the next round's blocks.
-        expect(data.committed).toHaveLength(2);
-        expect((data.committed[0] as { usage?: unknown }).usage).toBeUndefined();
-        expect((data.committed[1] as { usage?: unknown }).usage).toBeUndefined();
+        expect(data.committed.map(block => block.type)).toEqual(['usage', 'content', 'toolCall']);
+    });
+
+    it('covers reasoning-only rounds', () => {
+        const renderer = new UIRenderer();
+        renderer.updateActive('', 'ponder', []);
+        renderer.commitRoundUI('', 'ponder', usage);
+        expect(renderer.getCommittedRenderData().committed.map(block => block.type)).toEqual(['reasoning', 'usage']);
+    });
+
+    it('appendUsage emits the block without requiring round content', () => {
+        const renderer = new UIRenderer();
+        renderer.appendUsage(undefined);
+        renderer.appendUsage(usage);
+        expect(renderer.getCommittedRenderData().committed).toEqual([{ type: 'usage', usage }]);
     });
 });
 

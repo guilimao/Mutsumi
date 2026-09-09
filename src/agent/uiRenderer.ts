@@ -32,14 +32,6 @@ export class UIRenderer {
     private activeContent: string = '';
     /** Streaming (pending) tool calls for the current round */
     private activeTools: RenderBlock[] = [];
-    /**
-     * Usage of the just-finished round whose commit introduced no attachable block yet.
-     * Committed blocks are rendered once and never re-rendered, so usage must be present on a
-     * block's *first* frame; tool blocks only enter committed during tool execution (after
-     * commitRoundUI), so the usage waits here and lands on the round's first appended tool block.
-     * Cleared on consumption, or when the next commitRoundUI supersedes or drops it.
-     */
-    private pendingRoundUsage: BlockUsage | undefined = undefined;
     /** Whether the current round's reasoning has been locked into committed */
     private reasoningLocked: boolean = false;
     /** Whether the current round's content has been locked into committed */
@@ -85,22 +77,17 @@ export class UIRenderer {
      * @description Called after the stream completes (before tool execution).
      * Commits anything still active; the content/reasoning arguments serve as a
      * fallback for sections that never passed through updateActive. Per-round
-     * state is then reset for the next round. When usage is provided it is
-     * attached to content/tool blocks committed here; blocks that were locked
-     * mid-round (L2) are already rendered and cannot be retro-attached, and tool
-     * blocks of the round only arrive later, so in those cases the usage is kept
-     * pending for {@link appendBlock} (see pendingRoundUsage).
+     * state is then reset for the next round. When usage is provided it is appended
+     * as a dedicated usage block (see {@link appendUsage}).
      * @param {string} content - Final accumulated content of the round
      * @param {string} reasoning - Final accumulated reasoning of the round
      * @param {BlockUsage} [usage] - Token/cost of the assistant message that produced this round
      *
-     * Round-badge rule (one badge per round; mirrored on .mtm reload by
-     * serializer.buildInteractionRenderBlocks): a round that commits content here badges that
-     * content block; a tool round badges its first appended tool block via {@link appendBlock}
-     * (pendingRoundUsage); a reasoning-only round carries no badge on either path.
+     * One usage block per round, on every path: content rounds, tool rounds (the block precedes
+     * the round's tool blocks, which are appended later during tool execution), and reasoning-only
+     * rounds. .mtm hydration mirrors this order in serializer.buildInteractionRenderBlocks.
      */
     commitRoundUI(content: string, reasoning: string, usage?: BlockUsage): void {
-        const roundStart = this.committedBlocks.length;
         const pendingReasoning = this.reasoningLocked ? '' : (this.activeReasoning || reasoning);
         const pendingContent = this.contentLocked ? '' : (this.activeContent || content);
         if (pendingReasoning) {
@@ -113,23 +100,7 @@ export class UIRenderer {
         if (pendingContent) {
             this.committedBlocks.push({ type: 'content', markdown: pendingContent });
         }
-        if (usage) {
-            let attached = false;
-            for (let i = this.committedBlocks.length - 1; i >= roundStart; i--) {
-                const block = this.committedBlocks[i];
-                if (block.type === 'content' || block.type === 'toolCall') {
-                    block.usage = usage;
-                    attached = true;
-                    break;
-                }
-            }
-            // No block was committed in this call (tool round, or content locked mid-round):
-            // keep the usage so the first tool block appended by the round's tool execution
-            // carries it on its first render.
-            this.pendingRoundUsage = attached ? undefined : usage;
-        } else {
-            this.pendingRoundUsage = undefined;
-        }
+        this.appendUsage(usage);
         this.reasoningLocked = false;
         this.contentLocked = false;
         this.activeReasoning = '';
@@ -138,18 +109,21 @@ export class UIRenderer {
     }
 
     /**
+     * Appends a round's token/cost block; no-op without usage.
+     * @description Separate from {@link commitRoundUI} so the degenerate no-content round in
+     * AgentRunner can emit its usage without inventing an empty content block.
+     * @param {BlockUsage} [usage] - Token/cost of the assistant message that produced the round
+     */
+    appendUsage(usage?: BlockUsage): void {
+        if (usage) this.committedBlocks.push({ type: 'usage', usage });
+    }
+
+    /**
      * L3 lock: appends a completed block (e.g. a finished tool call) to committed.
-     * @description A tool block appended right after a commitRoundUI that carried usage
-     * (but committed no content) receives that round's usage before its first render, so
-     * the token badge is visible live instead of only after a .mtm reload.
      * @param {RenderBlock} block - The block to commit
      */
     appendBlock(block: RenderBlock): void {
         this.committedBlocks.push(block);
-        if (block.type === 'toolCall' && !block.usage && this.pendingRoundUsage) {
-            block.usage = this.pendingRoundUsage;
-            this.pendingRoundUsage = undefined;
-        }
     }
 
     /**

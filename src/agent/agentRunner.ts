@@ -198,6 +198,7 @@ export class AgentRunner {
 
             if (!toolCalls.length && !roundContent && !roundReasoning) {
                 this.uiRenderer.appendBlock({ type: 'content', markdown: '_Mutsumi Debug: No content, reasoning, or tool calls received from API._' });
+                this.uiRenderer.appendUsage(toBlockUsage(assistantMessage.usage));
                 await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
                 break;
             }

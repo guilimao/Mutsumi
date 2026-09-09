@@ -125,15 +125,17 @@ describe('AgentRunner over the pi-ai faux provider', () => {
             content: [{ type: 'text', text: 'all done' }],
         });
 
-        // Terminal flush: the last output frame commits the content block (the usage-attach
-        // point) instead of leaving it stranded in the streaming active area.
+        // Terminal flush: the last output frame commits the round's blocks (content + usage)
+        // instead of leaving them stranded in the streaming active area.
         const calls = session.replaceOutput.mock.calls as unknown as [string, unknown][];
         const finalFrame = JSON.parse(calls.at(-1)?.[0] ?? '{}') as {
             active: unknown;
-            committed: { type: string; markdown: string }[];
+            committed: { type: string; markdown?: string }[];
         };
         expect(finalFrame.active).toBeNull();
-        expect(finalFrame.committed.at(-1)).toMatchObject({ type: 'content', markdown: 'all done' });
+        expect(finalFrame.committed.at(-2)).toMatchObject({ type: 'content', markdown: 'all done' });
+        // The faux provider reports estimated usage, so the round also commits a usage block.
+        expect(finalFrame.committed.at(-1)).toMatchObject({ type: 'usage' });
     });
 
     it('runs a full tool loop: SDK tool call -> tool result -> SDK final answer', async () => {

@@ -13,8 +13,8 @@ All notable user-visible changes are recorded here. The format follows
   `contextWindow`, `maxTokens`, `thinkingLevelMap`, `compat`) alongside plain
   string IDs, and a provider-wide `capabilities` object (`reasoning`, `input`)
   supplies defaults beneath them. See `docs/custom-model-capabilities.md`.
-- Token/cost usage is shown under assistant content blocks and on the first tool
-  block of a tool round.
+- Each assistant round's token/cost usage is shown as its own muted line after the
+  round's blocks — content rounds, tool rounds, and reasoning-only rounds alike.
 
 ### Changed — review before upgrading
 

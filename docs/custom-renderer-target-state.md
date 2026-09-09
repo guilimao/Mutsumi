@@ -14,6 +14,7 @@
 export type RenderBlock =
   | { type: 'content'; markdown: string }
   | { type: 'reasoning'; markdown: string; collapsed: boolean }
+  | { type: 'usage'; usage: BlockUsage }
   | {
       type: 'toolCall';
       name: string;
@@ -26,6 +27,11 @@ export type RenderBlock =
         codeBlockFilePaths?: (string | undefined)[];
       };
     };
+
+// 每轮 assistant 消息的 token/cost，由 UIRenderer.commitRoundUI（或退化轮的
+// appendUsage）在轮次提交时追加，位置在该轮 content/reasoning 之后、该轮工具块之前
+// （工具块在工具执行完毕时陆续 append）。.mtm 重新加载时
+// serializer.buildInteractionRenderBlocks 按同样顺序投影，两条路径无需共享附加规则。
 
 export interface RenderData {
   /** 已锁定的渲染块，渲染一次后 DOM 缓存，永不重渲染 */
@@ -189,6 +195,10 @@ LiteAdapter **不需要额外处理**。原因：
 { type: 'cancelled', messageCount: N }
 ```
 Phase 1 仅适配 `replaceOutput` 签名，SSE delta 逻辑暂不动。
+
+> **协议约定**：`RenderBlock` 是加法扩展的判别联合（已含 `content` / `reasoning` / `toolCall` /
+> `usage`）。HTTP/SSE 消费方必须**忽略未知的 `type`**，不得因新增块类型而报错；渲染器自身对
+> 未知类型渲染为空块而不是抛出。
 
 ## 范围边界
 

@@ -214,7 +214,7 @@ describe(`.mtm format version ${MTM_FORMAT_VERSION}`, () => {
     });
 });
 
-describe('serializer hydration usage attach (parity with the live UIRenderer path)', () => {
+describe('serializer hydration usage blocks (parity with the live UIRenderer path)', () => {
     const usage = { input: 100, output: 20, totalTokens: 120, cost: { total: 0.0005 } };
     const assistantWith = (content: unknown[]): PersistedAgentMessage => ({
         role: 'assistant',
@@ -226,46 +226,35 @@ describe('serializer hydration usage attach (parity with the live UIRenderer pat
         usage,
     } as unknown as PersistedAgentMessage);
 
-    it('badges the FIRST toolCall block when a round carries several tool calls', () => {
+    it('appends the usage block after a round with several tool calls', () => {
         const blocks = buildInteractionRenderBlocks([assistantWith([
             { type: 'text', text: 'calling tools' },
             { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
             { type: 'toolCall', id: 'call-2', name: 'grep', arguments: { pattern: 'x' } },
         ])], false);
-        const toolBlocks = blocks.filter(block => block.type === 'toolCall');
-        expect(toolBlocks).toHaveLength(2);
-        // Live path attaches the round's first appended tool block; hydration must agree
-        // so the badge does not move to the last tool block after a .mtm reload.
-        expect(toolBlocks[0]).toMatchObject({ usage: { input: 100, output: 20 } });
-        expect(toolBlocks[1].usage).toBeUndefined();
-        expect(blocks.find(block => block.type === 'content')?.usage).toBeUndefined();
+        expect(blocks.map(block => block.type)).toEqual(['content', 'toolCall', 'toolCall', 'usage']);
+        expect(blocks.at(-1)).toMatchObject({ type: 'usage', usage: { input: 100, output: 20 } });
     });
 
-    it('badges the content block of content-only rounds', () => {
+    it('appends the usage block after content-only rounds', () => {
         const blocks = buildInteractionRenderBlocks([assistantWith([
             { type: 'text', text: 'first part' },
             { type: 'text', text: 'second part' },
         ])], false);
-        const contentBlocks = blocks.filter(block => block.type === 'content');
-        expect(contentBlocks).toHaveLength(2);
-        expect(contentBlocks[0].usage).toBeUndefined();
-        expect(contentBlocks[1]).toMatchObject({ usage: { input: 100, output: 20 } });
+        expect(blocks.map(block => block.type)).toEqual(['content', 'content', 'usage']);
     });
 
-    it('leaves reasoning-only rounds unbadged', () => {
+    it('covers reasoning-only rounds', () => {
         const blocks = buildInteractionRenderBlocks([assistantWith([
             { type: 'thinking', thinking: 'ponder' },
         ])], false);
-        expect(blocks).toHaveLength(1);
-        expect(blocks[0]).toMatchObject({ type: 'reasoning' });
-        expect((blocks[0] as { usage?: unknown }).usage).toBeUndefined();
+        expect(blocks.map(block => block.type)).toEqual(['reasoning', 'usage']);
     });
 
-    it('skips attach when the persisted message carries no usage', () => {
+    it('skips the usage block when the persisted message carries no usage', () => {
         const bare = assistantWith([{ type: 'text', text: 'no usage here' }]);
         delete (bare as { usage?: unknown }).usage;
         const blocks = buildInteractionRenderBlocks([bare], false);
-        expect(blocks[0]).toMatchObject({ type: 'content', markdown: 'no usage here' });
-        expect((blocks[0] as { usage?: unknown }).usage).toBeUndefined();
+        expect(blocks.map(block => block.type)).toEqual(['content']);
     });
 });

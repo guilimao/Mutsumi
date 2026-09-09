@@ -25,8 +25,9 @@ interface BlockUsage {
 }
 
 type RenderBlock =
-  | { type: 'content'; markdown: string; usage?: BlockUsage }
+  | { type: 'content'; markdown: string }
   | { type: 'reasoning'; markdown: string; collapsed: boolean }
+  | { type: 'usage'; usage: BlockUsage }
   | {
       type: 'toolCall';
       name: string;
@@ -34,7 +35,6 @@ type RenderBlock =
       summary: string;
       result?: string;
       isStreaming: boolean;
-      usage?: BlockUsage;
       renderingConfig?: {
         argsToCodeBlock?: string[];
         codeBlockFilePaths?: (string | undefined)[];
@@ -175,7 +175,7 @@ function readOutputText(outputItem: RendererOutputItem): string {
   return new TextDecoder().decode(data);
 }
 
-/** Total tokens for a usage badge. */
+/** Total tokens shown in a usage line. */
 function usageTokens(usage: BlockUsage): number {
   return usage.totalTokens || usage.input + usage.output;
 }
@@ -202,7 +202,11 @@ function renderBlock(block: RenderBlock): HTMLElement {
   switch (block.type) {
     case 'content': {
       div.innerHTML = renderMarkdown(block.markdown);
-      if (block.usage) div.appendChild(usageFooter(block.usage));
+      break;
+    }
+    case 'usage': {
+      div.className = 'mutsumi-block mutsumi-usage-block';
+      div.appendChild(usageFooter(block.usage));
       break;
     }
     case 'reasoning': {
@@ -224,10 +228,7 @@ function renderBlock(block: RenderBlock): HTMLElement {
       const summary = document.createElement('summary');
       const prefix = block.isStreaming ? '⏳ ' : '';
       const suffix = block.isStreaming ? ' ...' : '';
-      const usageBadge = block.usage
-        ? ` · ${formatTokens(usageTokens(block.usage))} tok`
-        : '';
-      summary.textContent = `${prefix}${block.summary}${suffix}${usageBadge}`;
+      summary.textContent = `${prefix}${block.summary}${suffix}`;
       details.appendChild(summary);
 
       const argsDiv = document.createElement('div');

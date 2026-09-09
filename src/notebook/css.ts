@@ -16,12 +16,16 @@ export const RENDERER_CSS = `
   margin: 4px 0;
 }
 
-/* Muted token/cost footer under completed assistant content blocks */
+/* Muted token/cost footer; one standalone block per assistant round */
 .mutsumi-usage-footer {
   margin-top: 4px;
   font-size: 0.85em;
   opacity: 0.65;
   user-select: none;
+}
+
+.mutsumi-usage-block {
+  margin: 2px 0 6px;
 }
 
 /* Themed container replacement for tool calls and reasoning */

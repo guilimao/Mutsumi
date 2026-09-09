@@ -228,15 +228,11 @@ export function extractGhostBlocksFromCells(cells: GenericCellData[]): (GhostBlo
 
 /**
  * Build RenderBlocks from an interaction message group.
- * Pure function shared by deserializeNotebook output generation; exported for
- * hydration-attach parity tests.
+ * Pure function shared by deserializeNotebook output generation; exported for hydration tests.
  *
- * Usage attach rule (one badge per assistant round) mirrors the live UIRenderer
- * path, see {@link UIRenderer.commitRoundUI} / appendBlock: a message with tool
- * calls badges its FIRST toolCall block (live attaches the first tool block
- * appended after commitRoundUI); a content-only message badges its LAST text
- * block (live attaches the round's merged content at commit). Reasoning-only
- * rounds carry no badge on either path.
+ * Usage is projected as its own `usage` block after each assistant message's blocks, mirroring
+ * the live path (UIRenderer.commitRoundUI appends the round's usage block once). Content, tool,
+ * and reasoning-only rounds therefore render the same footer.
  */
 export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent: boolean): RenderBlock[] {
     const blocks: RenderBlock[] = [];
@@ -247,22 +243,16 @@ export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isS
 
     for (const m of group) {
         if (m.role === 'assistant') {
-            // Attach candidates in part order: content/tool blocks carry the badge; reasoning
-            // blocks never do. See the function doc for the parity rule.
-            let lastContentBlock: Extract<RenderBlock, { type: 'content' | 'toolCall' }> | undefined;
-            let firstToolCallBlock: Extract<RenderBlock, { type: 'content' | 'toolCall' }> | undefined;
             for (const part of m.content) {
                 if (part.type === 'thinking' && part.thinking) {
                     blocks.push({ type: 'reasoning', markdown: part.thinking, collapsed: true });
                 } else if (part.type === 'text' && part.text) {
-                    const block: RenderBlock = { type: 'content', markdown: part.text };
-                    blocks.push(block);
-                    lastContentBlock = block;
+                    blocks.push({ type: 'content', markdown: part.text });
                 } else if (part.type === 'toolCall') {
                     const result = toolResults.get(part.id);
                     const summary = ToolManager.getInstance().getPrettyPrint(part.name, part.arguments, isSubAgent);
                     const renderingConfig = ToolManager.getInstance().getToolRenderingConfig(part.name, isSubAgent);
-                    const block: RenderBlock = {
+                    blocks.push({
                         type: 'toolCall',
                         name: part.name,
                         args: part.arguments,
@@ -270,18 +260,12 @@ export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isS
                         result: result ? serializeContentToString(result.content) : undefined,
                         isStreaming: false,
                         renderingConfig,
-                    };
-                    blocks.push(block);
-                    lastContentBlock = block;
-                    firstToolCallBlock ??= block;
+                    });
                 }
             }
             // The persisted shape keeps usage loose; hydration validates it before any send.
             const usage = toBlockUsage(m.usage as Usage | undefined);
-            const usageBlock = firstToolCallBlock ?? lastContentBlock;
-            if (usage && usageBlock) {
-                usageBlock.usage = usage;
-            }
+            if (usage) blocks.push({ type: 'usage', usage });
         }
     }
     return blocks;
