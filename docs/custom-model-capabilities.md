@@ -63,8 +63,14 @@ SDK **不解析**自定义 `/models` 列表的能力字段（该列表只承诺 
 
 校验规则（`validateProfiles`）：
 
-- `models` items 接受 `string | object` 双形态；object 必须有非空 `id`。
-- `reasoning` 必须 boolean；`input` 必须是 `('text' | 'image')[]` 非空子集（去重）。
+- 入参保持 `unknown`，逐字段校验后才构造 `CustomProviderProfile`（settings JSON 是外部输入，
+  不能用类型签名假装已校验）。
+- `models` 必须是数组；items 接受 `string | object` 双形态；object 必须有非空 `id`。
+- **重复模型 id 直接报错**（trim 后比较，字符串与 spec 共用一个命名空间），错误信息指出两处
+  数组下标。不再有"第一个声明获胜"或"spec 获胜"的隐式优先级——两者的差异曾让一次无关的
+  provider 编辑改变模型能力。
+- `displayName` 必须是字符串；`reasoning` 必须 boolean；`input` 必须是 `('text' | 'image')[]`
+  非空子集（去重）。
 - `contextWindow` / `maxTokens` 必须正整数。
 - `thinkingLevelMap` / `compat` 做结构浅校验后原样透传（不做语义翻译，C6）。compat 值允许
   boolean/string/number 及 plain object（SDK compat 接口含 `chatTemplateArgs`/`openRouterRouting`

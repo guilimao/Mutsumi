@@ -106,8 +106,8 @@ async function updateCustomProvider(id: string, existing?: CustomProviderProfile
             auth: auth.value,
             models: [
                 ...declaredSpecs,
-                // String entries already declared as specs are dropped so the write-back cannot
-                // leave duplicate ids in settings (the spec form wins, matching validation).
+                // Duplicate model IDs are rejected by validation, so string entries that repeat a
+                // declared spec id are dropped here (a spec and a string cannot merge).
                 ...[...new Set(manualModels.split(',').map(model => model.trim()).filter(Boolean))]
                     .filter(modelId => !declaredIds.has(modelId)),
             ],

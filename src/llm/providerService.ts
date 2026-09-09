@@ -93,8 +93,9 @@ export class LlmProviderService {
     async reload(): Promise<void> {
         const credentials = this.requireCredentialStore();
         const modelsStore = this.requireModelsStore();
+        // Untrusted external input: validated into typed profiles by validateProfiles.
         const rawProfiles = vscode.workspace.getConfiguration('mutsumi')
-            .get<Record<string, CustomProviderProfile>>('customProviders', {});
+            .get<unknown>('customProviders', {});
         const customProfiles = this.validateProfiles(rawProfiles);
         // pi-ai restores the persisted discovery cache over the declared baseline by id, so a
         // profile edit would otherwise stay shadowed until a successful network refresh — across
@@ -240,18 +241,29 @@ export class LlmProviderService {
         return this.requireCredentialStore();
     }
 
-    private validateProfiles(raw: Record<string, CustomProviderProfile>): Map<string, CustomProviderProfile> {
+    /**
+     * Validates the untrusted `mutsumi.customProviders` value into typed profiles.
+     * @remarks The parameter stays `unknown` on purpose: settings JSON is external input and
+     * a typed signature would only pretend the shape was checked. Every field is narrowed here
+     * before it reaches {@link CustomProviderProfile}.
+     */
+    private validateProfiles(raw: unknown): Map<string, CustomProviderProfile> {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
             throw new Error('mutsumi.customProviders must be an object keyed by provider route');
         }
         const result = new Map<string, CustomProviderProfile>();
-        for (const [untrimmedId, profile] of Object.entries(raw)) {
+        for (const [untrimmedId, rawProfile] of Object.entries(raw as Record<string, unknown>)) {
             const id = untrimmedId.trim();
             if (!id) throw new Error('Custom provider IDs must be non-empty');
             if (result.has(id)) throw new Error(`Custom provider route "${id}" is duplicated after trimming`);
-            if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
+            if (!rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) {
                 throw new Error(`Custom provider "${id}" must be an object`);
             }
+            const profile = rawProfile as Record<string, unknown>;
+            if (profile.displayName !== undefined && typeof profile.displayName !== 'string') {
+                throw new Error(`Custom provider "${id}" displayName must be a string`);
+            }
+            const displayName = typeof profile.displayName === 'string' ? profile.displayName.trim() : '';
             const baseUrl = typeof profile.baseUrl === 'string' ? profile.baseUrl.trim() : '';
             if (!baseUrl) throw new Error(`Custom provider "${id}" has an empty baseUrl`);
             let parsedUrl: URL;
@@ -274,10 +286,10 @@ export class LlmProviderService {
             if (auth !== 'apiKey' && auth !== 'none') {
                 throw new Error(`Custom provider "${id}" has unsupported auth "${String(profile.auth)}"`);
             }
-            const models = this.validateModelEntries(id, profile.models ?? []);
+            const models = this.validateModelEntries(id, profile.models);
             const capabilities = this.validateCapabilities(id, profile.capabilities);
             result.set(id, {
-                ...profile.displayName?.trim() ? { displayName: profile.displayName.trim() } : {},
+                ...displayName ? { displayName } : {},
                 baseUrl,
                 api,
                 auth,
@@ -288,15 +300,19 @@ export class LlmProviderService {
         return result;
     }
 
-    private validateModelEntries(id: string, entries: unknown[]): (string | CustomModelSpec)[] {
+    private validateModelEntries(id: string, entries: unknown): (string | CustomModelSpec)[] {
+        if (entries === undefined) return [];
+        if (!Array.isArray(entries)) {
+            throw new Error(`Custom provider "${id}" models must be an array of model IDs or specs`);
+        }
         const models: (string | CustomModelSpec)[] = [];
-        const seen = new Set<string>();
-        for (const entry of entries) {
+        const seen = new Map<string, number>();
+        for (let index = 0; index < entries.length; index++) {
+            const entry: unknown = entries[index];
             if (typeof entry === 'string') {
                 const modelId = entry.trim();
                 if (!modelId) throw new Error(`Custom provider "${id}" models must contain non-empty strings`);
-                if (seen.has(modelId)) continue;
-                seen.add(modelId);
+                this.assertUniqueModelId(id, seen, modelId, index);
                 models.push(modelId);
                 continue;
             }
@@ -306,8 +322,7 @@ export class LlmProviderService {
             const spec = entry as Record<string, unknown>;
             const modelId = typeof spec.id === 'string' ? spec.id.trim() : '';
             if (!modelId) throw new Error(`Custom provider "${id}" model specs must have a non-empty id`);
-            // Validate before deduplicating: a malformed duplicate must still surface as a
-            // configuration error instead of being silently ignored (first entry still wins).
+            this.assertUniqueModelId(id, seen, modelId, index);
             const normalized: CustomModelSpec = { id: modelId };
             if (spec.name !== undefined) {
                 if (typeof spec.name !== 'string' || !spec.name.trim()) {
@@ -357,11 +372,24 @@ export class LlmProviderService {
                 }
                 normalized.compat = spec.compat as CustomModelSpec['compat'];
             }
-            if (seen.has(modelId)) continue;
-            seen.add(modelId);
             models.push(normalized);
         }
         return models;
+    }
+
+    /**
+     * Rejects duplicate declared model IDs instead of picking a winner.
+     * @remarks "First declaration wins" and the provider editor's "spec wins" write-back
+     * ordering used to disagree, so an unrelated UI edit could flip a model's capabilities.
+     * The conflict is reported with both array positions; string and spec forms share one
+     * namespace because they are compared after trimming.
+     */
+    private assertUniqueModelId(id: string, seen: Map<string, number>, modelId: string, index: number): void {
+        const previous = seen.get(modelId);
+        if (previous !== undefined) {
+            throw new Error(`Custom provider "${id}" declares model "${modelId}" more than once (models[${previous}] and models[${index}])`);
+        }
+        seen.set(modelId, index);
     }
 
     private validateCapabilities(id: string, capabilities: unknown): CustomProviderCapabilities | undefined {

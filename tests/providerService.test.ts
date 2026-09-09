@@ -66,7 +66,7 @@ describe('LlmProviderService registry', () => {
         vscodeState.profiles = {
             local: {
                 displayName: ' Local ', baseUrl: 'http://localhost:8080/v1/',
-                auth: 'none', models: [' test-model ', 'test-model'],
+                auth: 'none', models: [' test-model '],
             },
         };
         const service = new LlmProviderService();
@@ -112,6 +112,9 @@ describe('LlmProviderService registry', () => {
         [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', contextWindow: 0 }] } }, 'positive integer'],
         [{ local: { baseUrl: 'https://example.test/v1', capabilities: { reasoning: 1 } } }, 'must be a boolean'],
         [{ local: { baseUrl: 'https://example.test/v1', models: [{ id: 'm', compat: { nested: [] } }] } }, 'compat must map'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: 'gpt' } }, 'models must be an array'],
+        [{ local: { baseUrl: 'https://example.test/v1', models: {} } }, 'models must be an array'],
+        [{ local: { baseUrl: 'https://example.test/v1', displayName: 123 } }, 'displayName must be a string'],
     ])('rejects invalid capability declarations (%j)', async (profiles, message) => {
         vscodeState.profiles = profiles;
         const service = new LlmProviderService();
@@ -140,23 +143,23 @@ describe('LlmProviderService registry', () => {
         });
     });
 
-    it('validates every duplicate spec but keeps the first declaration (first wins)', async () => {
-        vscodeState.profiles = {
-            local: {
-                baseUrl: 'https://example.test/v1',
-                models: [{ id: 'dup-model', reasoning: false }, { id: 'dup-model', reasoning: true }],
-            },
-        };
+    it.each([
+        [['dup-model', 'dup-model'], 'models[0] and models[1]'],
+        [[' m ', 'm'], 'models[0] and models[1]'],
+        [['dup-model', { id: 'dup-model', reasoning: true }], 'models[0] and models[1]'],
+        [[{ id: 'dup-model' }, { id: 'dup-model' }], 'models[0] and models[1]'],
+        [['a', 'b', 'a'], 'models[0] and models[2]'],
+    ])('rejects duplicate model IDs instead of letting order decide capabilities (%j)', async (models, message) => {
+        vscodeState.profiles = { local: { baseUrl: 'https://example.test/v1', models } };
         const service = new LlmProviderService();
-        await service.initialize(context());
-        expect(service.getModel('local', 'dup-model')).toMatchObject({ reasoning: false });
+        await expect(service.initialize(context())).rejects.toThrow(message);
     });
 
-    it('rejects invalid fields on a duplicate spec instead of silently ignoring them', async () => {
+    it('still validates spec fields when the model ID is unique', async () => {
         vscodeState.profiles = {
             local: {
                 baseUrl: 'https://example.test/v1',
-                models: ['dup-model', { id: 'dup-model', reasoning: 'not-a-boolean' }],
+                models: [{ id: 'only-model', reasoning: 'not-a-boolean' }],
             },
         };
         const service = new LlmProviderService();
