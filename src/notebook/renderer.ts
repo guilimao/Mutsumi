@@ -7,48 +7,14 @@
 
 import { RENDERER_CSS } from './css';
 import { formatTokens } from './formatTokens';
+// Type-only import: erased at build time, so the renderer bundle pulls in no
+// extension runtime code while sharing the exact IR declared by the producer.
+import type { BlockUsage, RenderBlock, RenderData } from './renderTypes';
 
 import { micromark } from 'micromark';
 import { gfm, gfmHtml } from 'micromark-extension-gfm';
 import { createLowlight, all } from 'lowlight';
 import { toHtml } from 'hast-util-to-html';
-
-// Types matching src/notebook/renderTypes.ts (duplicated here to avoid
-// importing from extension code in the renderer process)
-interface BlockUsage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  costTotal: number;
-}
-
-type RenderBlock =
-  | { type: 'content'; markdown: string }
-  | { type: 'reasoning'; markdown: string; collapsed: boolean }
-  | { type: 'usage'; usage: BlockUsage }
-  | {
-      type: 'toolCall';
-      name: string;
-      args: Record<string, any>;
-      summary: string;
-      result?: string;
-      isStreaming: boolean;
-      renderingConfig?: {
-        argsToCodeBlock?: string[];
-        codeBlockFilePaths?: (string | undefined)[];
-      };
-    };
-
-interface RenderData {
-  committed: RenderBlock[];
-  active: {
-    reasoning: string;
-    content: string;
-    pendingTools: RenderBlock[];
-  } | null;
-}
 
 interface PreFingerprint {
   language: string;
@@ -175,18 +141,14 @@ function readOutputText(outputItem: RendererOutputItem): string {
   return new TextDecoder().decode(data);
 }
 
-/** Total tokens shown in a usage line. */
-function usageTokens(usage: BlockUsage): number {
-  return usage.totalTokens || usage.input + usage.output;
-}
-
 /** Muted footer line for a block's token/cost usage. */
 function usageFooter(usage: BlockUsage): HTMLElement {
   const footer = document.createElement('div');
   footer.className = 'mutsumi-usage-footer';
   const parts = [`in ${formatTokens(usage.input)}`, `out ${formatTokens(usage.output)}`];
   if (usage.cacheRead > 0) parts.push(`cache ${formatTokens(usage.cacheRead)}`);
-  parts.push(`${formatTokens(usageTokens(usage))} tok`);
+  // totalTokens is finalized upstream by toBlockUsage (SDK formula), never recomputed here.
+  parts.push(`${formatTokens(usage.totalTokens)} tok`);
   // 4dp gives $0.0001 resolution (0.01 cent); anything smaller would render as a
   // misleading "$0.0000", so it is hidden. toBlockUsage already drops cost-only junk.
   if (usage.costTotal >= 0.00005) parts.push(`$${usage.costTotal.toFixed(4)}`);

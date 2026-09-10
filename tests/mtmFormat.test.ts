@@ -21,6 +21,8 @@ import { toPiContext } from '../src/llm/context';
 import { decodeAgentContext, encodeAgentContext, INVALID_MTM_FILE, UNSUPPORTED_MTM_FORMAT } from '../src/mtmFormat';
 import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage, type PersistedAgentMessage } from '../src/types';
 import { extractNotebookNotes, buildInteractionRenderBlocks, genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
+import { UIRenderer } from '../src/agent/uiRenderer';
+import { toBlockUsage } from '../src/notebook/renderTypes';
 import { parseUserMessageWithImages } from '../src/contextManagement/utils';
 import { hydrateProviderMessage, mergeConsecutiveUserMessages } from '../src/contextManagement/history';
 
@@ -226,14 +228,30 @@ describe('serializer hydration usage blocks (parity with the live UIRenderer pat
         usage,
     } as unknown as PersistedAgentMessage);
 
-    it('appends the usage block after a round with several tool calls', () => {
+    it('places the usage block before the round tool blocks, as the live path does', () => {
         const blocks = buildInteractionRenderBlocks([assistantWith([
             { type: 'text', text: 'calling tools' },
             { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
             { type: 'toolCall', id: 'call-2', name: 'grep', arguments: { pattern: 'x' } },
         ])], false);
-        expect(blocks.map(block => block.type)).toEqual(['content', 'toolCall', 'toolCall', 'usage']);
-        expect(blocks.at(-1)).toMatchObject({ type: 'usage', usage: { input: 100, output: 20 } });
+        expect(blocks.map(block => block.type)).toEqual(['content', 'usage', 'toolCall', 'toolCall']);
+        expect(blocks.find(block => block.type === 'usage')).toMatchObject({ usage: { input: 100, output: 20 } });
+    });
+
+    it('matches the live UIRenderer block order for a content-plus-tool round', () => {
+        const renderer = new UIRenderer();
+        renderer.updateActive('calling tools', '', []);
+        renderer.commitRoundUI('calling tools', '', toBlockUsage(usage as any));
+        for (const name of ['read', 'grep']) {
+            renderer.appendBlock({ type: 'toolCall', name, args: {}, summary: name, isStreaming: false });
+        }
+        const live = renderer.getCommittedRenderData().committed.map(block => block.type);
+        const hydrated = buildInteractionRenderBlocks([assistantWith([
+            { type: 'text', text: 'calling tools' },
+            { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
+            { type: 'toolCall', id: 'call-2', name: 'grep', arguments: { pattern: 'x' } },
+        ])], false).map(block => block.type);
+        expect(hydrated).toEqual(live);
     });
 
     it('appends the usage block after content-only rounds', () => {

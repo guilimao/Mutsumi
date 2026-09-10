@@ -6,6 +6,9 @@
  */
 
 import type { Usage } from '@earendil-works/pi-ai';
+// pi-ai's own token accounting: `totalTokens || input + output + cacheRead + cacheWrite`.
+// Reused so the local fallback cannot drift from the SDK's definition of a total.
+import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
 
 /**
  * Custom MIME type for agent chat render data.
@@ -34,7 +37,9 @@ export interface BlockUsage {
  * Maps pi-ai's Usage onto the serializable IR shape, defaulting missing fields to zero.
  * @description Tolerates the loose persisted shape (`.mtm` usage is untyped): non-numeric
  * junk is coerced to zero, and a usage carrying no countable tokens (empty object,
- * hand-edited garbage) maps to undefined so no all-zero badge renders. The emptiness gate
+ * hand-edited garbage) maps to undefined so no all-zero badge renders. A missing
+ * `totalTokens` is filled in with the SDK's own token accounting
+ * (`calculateContextTokens`), so cached input is not silently dropped. The emptiness gate
  * counts token fields only — pi-ai derives cost from tokens, so a cost-only usage is junk
  * rather than a billable round and must not render an empty "$0.0000" badge.
  */
@@ -46,7 +51,16 @@ export function toBlockUsage(usage: Usage | undefined): BlockUsage | undefined {
     const output = num(usage.output);
     const cacheRead = num(usage.cacheRead);
     const cacheWrite = num(usage.cacheWrite);
-    const totalTokens = usage.totalTokens === undefined ? input + output : num(usage.totalTokens);
+    // num() turns undefined/junk into 0, which calculateContextTokens reads as "absent" and
+    // falls back to the full input+output+cacheRead+cacheWrite sum.
+    const totalTokens = calculateContextTokens({
+        input,
+        output,
+        cacheRead,
+        cacheWrite,
+        totalTokens: num(usage.totalTokens),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    });
     const costTotal = num(usage.cost?.total);
     if (input + output + cacheRead + cacheWrite + totalTokens === 0) return undefined;
     return { input, output, cacheRead, cacheWrite, totalTokens, costTotal };

@@ -230,9 +230,11 @@ export function extractGhostBlocksFromCells(cells: GenericCellData[]): (GhostBlo
  * Build RenderBlocks from an interaction message group.
  * Pure function shared by deserializeNotebook output generation; exported for hydration tests.
  *
- * Usage is projected as its own `usage` block after each assistant message's blocks, mirroring
- * the live path (UIRenderer.commitRoundUI appends the round's usage block once). Content, tool,
- * and reasoning-only rounds therefore render the same footer.
+ * Usage is projected as its own `usage` block once per assistant message, placed after that
+ * message's reasoning/content blocks and before its toolCall blocks. That is the same order the
+ * live path produces: UIRenderer.commitRoundUI commits reasoning/content, then appends the usage
+ * block, and the round's tool blocks only arrive later during tool execution. Persisted tool
+ * results therefore never push the usage line around on reload.
  */
 export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isSubAgent: boolean): RenderBlock[] {
     const blocks: RenderBlock[] = [];
@@ -243,6 +245,9 @@ export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isS
 
     for (const m of group) {
         if (m.role === 'assistant') {
+            // Tool blocks are collected separately so the usage block can sit between them and
+            // the assistant's own reasoning/content, matching the live commit order.
+            const toolCallBlocks: RenderBlock[] = [];
             for (const part of m.content) {
                 if (part.type === 'thinking' && part.thinking) {
                     blocks.push({ type: 'reasoning', markdown: part.thinking, collapsed: true });
@@ -252,7 +257,7 @@ export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isS
                     const result = toolResults.get(part.id);
                     const summary = ToolManager.getInstance().getPrettyPrint(part.name, part.arguments, isSubAgent);
                     const renderingConfig = ToolManager.getInstance().getToolRenderingConfig(part.name, isSubAgent);
-                    blocks.push({
+                    toolCallBlocks.push({
                         type: 'toolCall',
                         name: part.name,
                         args: part.arguments,
@@ -266,6 +271,7 @@ export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isS
             // The persisted shape keeps usage loose; hydration validates it before any send.
             const usage = toBlockUsage(m.usage as Usage | undefined);
             if (usage) blocks.push({ type: 'usage', usage });
+            blocks.push(...toolCallBlocks);
         }
     }
     return blocks;

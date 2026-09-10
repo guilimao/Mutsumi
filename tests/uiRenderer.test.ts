@@ -73,7 +73,10 @@ describe('UIRenderer usage blocks', () => {
 });
 
 describe('toBlockUsage projection', () => {
-    it('falls back totalTokens to input + output', () => {
+    it('falls back totalTokens to the full token sum, cached input included', () => {
+        expect(toBlockUsage({ input: 5, output: 3, cacheRead: 100, cacheWrite: 20 } as any)).toEqual({
+            input: 5, output: 3, cacheRead: 100, cacheWrite: 20, totalTokens: 128, costTotal: 0,
+        });
         expect(toBlockUsage({ input: 5, output: 3 } as any)).toEqual({
             input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8, costTotal: 0,
         });

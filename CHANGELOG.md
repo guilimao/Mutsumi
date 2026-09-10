@@ -14,7 +14,9 @@ All notable user-visible changes are recorded here. The format follows
   string IDs, and a provider-wide `capabilities` object (`reasoning`, `input`)
   supplies defaults beneath them. See `docs/custom-model-capabilities.md`.
 - Each assistant round's token/cost usage is shown as its own muted line after the
-  round's blocks — content rounds, tool rounds, and reasoning-only rounds alike.
+  round's content/reasoning and before its tool calls — content rounds, tool rounds, and
+  reasoning-only rounds alike. The same order is rebuilt when reopening a `.mtm` file, so
+  the line no longer jumps around between live output and reload.
 
 ### Changed — review before upgrading
 
