@@ -50,7 +50,22 @@ All notable user-visible changes are recorded here. The format follows
 
 ### Fixed
 
+- A discovered catalog is now stored together with the fingerprint of the custom
+  provider declaration that produced it, and is used only while that fingerprint matches
+  the current declaration. Previously the fingerprint lived in a separate key, so a reload
+  that updated some providers' fingerprints before failing could pair a stale catalog with
+  the new declaration and shadow it after a restart.
+- A model refresh still in flight when a provider declaration changes can no longer write
+  its stale catalog into the new declaration's cache. The reload aborts the outgoing
+  snapshot's refreshes and waits for the catalog writes themselves — the SDK's refresh
+  promise can settle early when the abort races it.
+- Overlapping reloads from rapid configuration changes are now serialized. A slower
+  earlier reload can no longer publish after a later one and restore the old config.
+- If persisting a reload fails, the retained snapshot is handed a fresh refresh
+  controller. Aborting the outgoing snapshot is irreversible, so without this a storage
+  error during reload would silently disable every later model refresh.
 - Upgrading from a version that persisted a discovery catalog before profile
-  fingerprints existed now drops that catalog once. Previously the missing
-  fingerprint was treated as "unchanged", so the stale catalog kept shadowing the
-  newly declared capabilities until a successful network refresh.
+  fingerprints existed drops that catalog once: it carries no fingerprint matching the
+  current declaration. Previously the missing fingerprint was treated as "unchanged", so
+  the stale catalog kept shadowing the newly declared capabilities until a successful
+  network refresh.

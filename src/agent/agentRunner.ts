@@ -18,6 +18,7 @@ import { debugLogger } from '../debugLogger';
 import { getTitleModelSelection } from '../utils';
 import { AgentRunContext, AgentRunOptions, AgentRunResult } from './types';
 import type { ToolCall } from '@earendil-works/pi-ai';
+import { assistantText } from '../llm/messageText';
 import { t } from '../i18n';
 
 export { AgentRunOptions } from './types';
@@ -185,10 +186,9 @@ export class AgentRunner {
                 break;
             }
 
-            const textBlocks = assistantMessage.content.filter(block => block.type === 'text');
             const thinkingBlocks = assistantMessage.content.filter(block => block.type === 'thinking');
             const toolCalls = assistantMessage.content.filter((block): block is ToolCall => block.type === 'toolCall');
-            const roundContent = textBlocks.map(block => block.text).join('');
+            const roundContent = assistantText(assistantMessage);
             const roundReasoning = thinkingBlocks.map(block => block.thinking).join('');
 
             const roundMessageStart = messages.length;

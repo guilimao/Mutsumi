@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const vscodeState = vi.hoisted(() => ({ profiles: {} as Record<string, unknown> }));
+const vscodeState = vi.hoisted(() => ({ profiles: {} as Record<string, unknown>, configReads: 0 }));
 vi.mock('vscode', () => ({
     workspace: {
-        getConfiguration: () => ({ get: (_key: string, fallback: unknown) => vscodeState.profiles ?? fallback }),
+        getConfiguration: () => {
+            vscodeState.configReads++;
+            return { get: (_key: string, fallback: unknown) => vscodeState.profiles ?? fallback };
+        },
     },
 }));
 
@@ -28,6 +31,7 @@ function context() {
 
 afterEach(() => {
     vscodeState.profiles = {};
+    vscodeState.configReads = 0;
     vi.restoreAllMocks();
     vi.useRealTimers();
 });
@@ -289,6 +293,192 @@ describe('LlmProviderService registry', () => {
         // Declared-only and server-extra models both survive the merge.
         expect(service.getModel('local', 'declared-only-model').id).toBe('declared-only-model');
         expect(service.getModel('local', 'server-extra-model')).toMatchObject({ reasoning: true, input: ['text', 'image'] });
+    });
+
+    it('drains a catalog write that is already running when the profile reloads', async () => {
+        const globalState = new MemoryMemento();
+        const restartContext = () => ({ secrets: new MemorySecrets(), globalState }) as any;
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none',
+                models: [{ id: 'mutable-model', reasoning: false }],
+            },
+        };
+        const service = new LlmProviderService();
+        await service.initialize(restartContext());
+
+        // Stall the catalog write itself. The SDK races refresh against the abort signal, so its
+        // refresh promise resolves while this write is still running; the reload must wait for the
+        // write, not for the promise.
+        const catalogKey = 'mutsumi.llmModels.v1.local';
+        const update = globalState.update.bind(globalState);
+        let writeStarted!: () => void;
+        const started = new Promise<void>(resolve => { writeStarted = resolve; });
+        let releaseWrite!: () => void;
+        const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+        vi.spyOn(globalState, 'update').mockImplementation(async (key: string, value: unknown) => {
+            if (key === catalogKey && value !== undefined) {
+                writeStarted();
+                await writeGate;
+            }
+            await update(key, value);
+        });
+
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+            JSON.stringify({ data: [{ id: 'mutable-model' }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+        ));
+        const pendingRefresh = service.refreshModels();
+        await started;
+
+        // Flip the declaration and reload while the stale catalog write is still in flight.
+        vscodeState.profiles = {
+            local: {
+                baseUrl: 'https://example.test/v1', auth: 'none',
+                models: [{ id: 'mutable-model', reasoning: true }],
+            },
+        };
+        const reload = service.reload();
+        let reloadSettled = false;
+        void reload.then(() => { reloadSettled = true; }, () => { reloadSettled = true; });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(reloadSettled).toBe(false);
+
+        releaseWrite();
+        await reload;
+        await pendingRefresh;
+
+        // The stale catalog must be deleted after its write completes, not left under the freshly
+        // written fingerprint.
+        expect(globalState.values.get(catalogKey)).toBeUndefined();
+        const restarted = new LlmProviderService();
+        await restarted.initialize(restartContext());
+        expect(restarted.getModel('local', 'mutable-model').reasoning).toBe(true);
+    });
+
+    it('serializes overlapping reloads so a slower earlier reload cannot publish last', async () => {
+        const globalState = new MemoryMemento();
+        const restartContext = () => ({ secrets: new MemorySecrets(), globalState }) as any;
+        vscodeState.profiles = {
+            local: { baseUrl: 'https://example.test/v1', auth: 'none', models: [{ id: 'm', reasoning: false }] },
+        };
+        const service = new LlmProviderService();
+        await service.initialize(restartContext());
+
+        // Seed a catalog tagged for another declaration so the first reload purges it, and stall
+        // that purge so a second reload overlaps the first.
+        const catalogKey = 'mutsumi.llmModels.v1.local';
+        globalState.values.set(catalogKey, { models: [], mutsumiProfileFingerprint: 'stale' });
+        const update = globalState.update.bind(globalState);
+        let gateFirstPurge = true;
+        let releaseFirst!: () => void;
+        const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+        vi.spyOn(globalState, 'update').mockImplementation(async (key: string, value: unknown) => {
+            if (key === catalogKey && gateFirstPurge) {
+                gateFirstPurge = false;
+                await firstGate;
+            }
+            await update(key, value);
+        });
+
+        vscodeState.configReads = 0;
+        vscodeState.profiles = {
+            local: { baseUrl: 'https://example.test/v1', auth: 'none', models: [{ id: 'm', reasoning: true }] },
+        };
+        const first = service.reload();
+        vscodeState.profiles = {
+            local: { baseUrl: 'https://example.test/v1', auth: 'none', models: [{ id: 'm', reasoning: false }] },
+        };
+        const second = service.reload();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        // The second reload must not have started while the first is still running.
+        expect(vscodeState.configReads).toBe(1);
+        releaseFirst();
+        await Promise.all([first, second]);
+        expect(service.getModel('local', 'm').reasoning).toBe(false);
+    });
+
+    it('keeps the previous snapshot refreshable when a reload fails after aborting it', async () => {
+        const globalState = new MemoryMemento();
+        const restartContext = () => ({ secrets: new MemorySecrets(), globalState }) as any;
+        vscodeState.profiles = {
+            local: { baseUrl: 'https://example.test/v1', auth: 'none', models: ['declared-model'] },
+        };
+        const service = new LlmProviderService();
+        await service.initialize(restartContext());
+
+        // Seed a catalog tagged for another declaration so the reload purges it, and make that
+        // purge fail — a storage error after the outgoing snapshot was aborted.
+        const catalogKey = 'mutsumi.llmModels.v1.local';
+        globalState.values.set(catalogKey, { models: [], mutsumiProfileFingerprint: 'stale' });
+        const update = globalState.update.bind(globalState);
+        const updateSpy = vi.spyOn(globalState, 'update').mockImplementation(async (key: string, value: unknown) => {
+            if (key === catalogKey) throw new Error('disk full');
+            await update(key, value);
+        });
+        vscodeState.profiles = {
+            local: { baseUrl: 'https://example.test/v1', auth: 'none', models: ['declared-model', 'second-model'] },
+        };
+        await expect(service.reload()).rejects.toThrow('disk full');
+        updateSpy.mockRestore();
+
+        // The retained snapshot must still refresh instead of silently returning an empty result.
+        vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+            JSON.stringify({ data: [{ id: 'declared-model' }, { id: 'server-only-model' }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+        ));
+        const errors = await service.refreshModels();
+        expect(errors.size).toBe(0);
+        expect(service.getModel('local', 'server-only-model').id).toBe('server-only-model');
+    });
+
+    it('never pairs a stale catalog with a new declaration after a partially persisted reload', async () => {
+        const globalState = new MemoryMemento();
+        const restartContext = () => ({ secrets: new MemorySecrets(), globalState }) as any;
+        vscodeState.profiles = {
+            alpha: { baseUrl: 'https://a.test/v1', auth: 'none', models: [{ id: 'alpha-model', reasoning: false }] },
+            beta: { baseUrl: 'https://b.test/v1', auth: 'none', models: ['beta-model'] },
+        };
+        const service = new LlmProviderService();
+        await service.initialize(restartContext());
+
+        // Cache catalogs for both providers under the current declarations.
+        vi.spyOn(globalThis, 'fetch').mockImplementation(async url => new Response(
+            JSON.stringify({ data: [{ id: String(url).includes('a.test') ? 'alpha-model' : 'beta-model' }] }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+        ));
+        await service.refreshModels();
+        expect(service.getModel('alpha', 'alpha-model').reasoning).toBe(false);
+        const alphaKey = 'mutsumi.llmModels.v1.alpha';
+        const cachedUnderOldDeclaration = (globalState.values.get(alphaKey) as any)?.mutsumiProfileFingerprint;
+        expect(cachedUnderOldDeclaration).toBeDefined();
+
+        // Change alpha's declaration and let beta's cache purge fail, so the reload stops after
+        // alpha's cache was already dropped.
+        vscodeState.profiles = {
+            alpha: { baseUrl: 'https://a.test/v1', auth: 'none', models: [{ id: 'alpha-model', reasoning: true }] },
+            beta: { baseUrl: 'https://b.test/v1', auth: 'none', models: ['beta-model'] },
+        };
+        const betaKey = 'mutsumi.llmModels.v1.beta';
+        globalState.values.set(betaKey, { models: [], mutsumiProfileFingerprint: 'stale' });
+        const update = globalState.update.bind(globalState);
+        const updateSpy = vi.spyOn(globalState, 'update').mockImplementation(async (key: string, value: unknown) => {
+            if (key === betaKey) throw new Error('disk full');
+            await update(key, value);
+        });
+        await expect(service.reload()).rejects.toThrow('disk full');
+        updateSpy.mockRestore();
+
+        // The retained (old) snapshot refreshes and writes alpha's old catalog back to disk,
+        // still tagged with the declaration that produced it.
+        await service.refreshModels();
+        expect((globalState.values.get(alphaKey) as any)?.mutsumiProfileFingerprint).toBe(cachedUnderOldDeclaration);
+
+        // A restart under the new declaration must ignore that old catalog.
+        const restarted = new LlmProviderService();
+        await restarted.initialize(restartContext());
+        expect(restarted.getModel('alpha', 'alpha-model').reasoning).toBe(true);
     });
 
     it('uses built-in ambient environment credentials as a SecretStorage fallback', async () => {

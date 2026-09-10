@@ -3,6 +3,7 @@
 import { isRetryableAssistantError } from '@earendil-works/pi-ai';
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai';
 import { LLMClient, ProviderStreamError } from './llmClient';
+import { assistantText } from '../llm/messageText';
 import type { ToolDefinition } from '../tools.d/interface';
 import type { AgentMessage } from '../types';
 
@@ -17,15 +18,13 @@ export interface StreamResponseResult {
 }
 
 function visible(message: AssistantMessage): { content: string; reasoning: string; toolCalls: ToolCall[] } {
-    const content: string[] = [];
     const reasoning: string[] = [];
     const toolCalls: ToolCall[] = [];
     for (const block of message.content) {
-        if (block.type === 'text') content.push(block.text);
-        else if (block.type === 'thinking') reasoning.push(block.thinking);
-        else toolCalls.push(block);
+        if (block.type === 'thinking') reasoning.push(block.thinking);
+        else if (block.type === 'toolCall') toolCalls.push(block);
     }
-    return { content: content.join(''), reasoning: reasoning.join(''), toolCalls };
+    return { content: assistantText(message), reasoning: reasoning.join(''), toolCalls };
 }
 
 /**

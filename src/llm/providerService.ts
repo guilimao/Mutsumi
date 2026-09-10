@@ -33,6 +33,11 @@ interface Snapshot {
     models: MutableModels;
     providers: ReadonlyMap<string, Provider>;
     customProfiles: ReadonlyMap<string, CustomProviderProfile>;
+    /**
+     * Aborted when this snapshot is superseded. In-flight refreshes share it, so a reload can
+     * stop a network refresh that would otherwise persist a catalog built from the old profiles.
+     */
+    refreshAbort: AbortController;
 }
 
 interface ListingEntry {
@@ -77,7 +82,14 @@ export class LlmProviderService {
 
     private snapshot: Snapshot | undefined;
     private credentialStore: VsCodeCredentialStore | undefined;
-    private modelsStore: VsCodeModelsStore | undefined;
+    private globalState: vscode.Memento | undefined;
+    /**
+     * Catalog mutations from every snapshot's store view. Shared so a reload drains writes started
+     * by earlier snapshots, not just the ones the current view would see.
+     */
+    private readonly catalogMutations = new Set<Promise<unknown>>();
+    /** Tail of the serialized reload chain; overlapping config changes must publish in order. */
+    private reloadChain: Promise<void> = Promise.resolve();
 
     static getInstance(): LlmProviderService {
         LlmProviderService.instance ??= new LlmProviderService();
@@ -86,48 +98,75 @@ export class LlmProviderService {
 
     async initialize(context: vscode.ExtensionContext): Promise<void> {
         this.credentialStore = new VsCodeCredentialStore(context.secrets, context.globalState);
-        this.modelsStore = new VsCodeModelsStore(context.globalState);
+        this.globalState = context.globalState;
         await this.reload();
     }
 
+    /**
+     * Rebuilds the registry from the current settings, one reload at a time.
+     * @remarks Successive configuration changes fire overlapping reloads. Without serialization a
+     * slower earlier reload could publish after a later one and restore the older config. Each
+     * call is chained behind the previous one; the returned promise still rejects on failure so
+     * callers can surface it, and the chain itself advances regardless.
+     */
+    reload(): Promise<void> {
+        const result = this.reloadChain.then(() => this.doReload());
+        this.reloadChain = result.catch(() => undefined);
+        return result;
+    }
+
     /** Build a complete candidate registry, restore cached catalogs, then publish atomically. */
-    async reload(): Promise<void> {
+    private async doReload(): Promise<void> {
         const credentials = this.requireCredentialStore();
-        const modelsStore = this.requireModelsStore();
         // Untrusted external input: validated into typed profiles by validateProfiles.
         const rawProfiles = vscode.workspace.getConfiguration('mutsumi')
             .get<unknown>('customProviders', {});
         const customProfiles = this.validateProfiles(rawProfiles);
-        // pi-ai restores the persisted discovery cache over the declared baseline by id, so a
-        // profile edit would otherwise stay shadowed until a successful network refresh — across
-        // restarts too, because the cache lives in globalState. Compare the persisted profile
-        // fingerprint and drop the cache when the fields that shape Model objects change. A
-        // missing fingerprint also counts as changed: catalogs persisted before fingerprints
-        // existed (extension upgrade) would otherwise survive with their stale Model objects.
-        for (const [id, profile] of customProfiles) {
-            const fingerprint = profileFingerprint(profile);
-            const previous = await modelsStore.readProfileFingerprint(id);
-            if (previous !== fingerprint) await modelsStore.delete(id);
-            await modelsStore.writeProfileFingerprint(id, fingerprint);
-        }
-        const models = createModels({ credentials, modelsStore });
-        const providers = new Map<string, Provider>();
+        // Each custom provider's catalog is cached together with this fingerprint of the
+        // declaration that produced it; see VsCodeModelsStore. Computing it before touching the
+        // store makes a catalog and its declaration inseparable even if a later step fails.
+        const fingerprints = new Map<string, string>();
+        for (const [id, profile] of customProfiles) fingerprints.set(id, profileFingerprint(profile));
 
+        // Build every provider and reject conflicts before touching persisted state: a failed
+        // reload must leave the current snapshot — and its ability to refresh — intact.
+        const providers = new Map<string, Provider>();
         for (const provider of builtinProviders()) {
             if (!provider.auth.apiKey) continue;
             providers.set(provider.id, provider);
-            models.setProvider(provider);
         }
         for (const [id, profile] of customProfiles) {
             if (providers.has(id)) throw new Error(`Custom provider "${id}" conflicts with a built-in provider`);
             if (REMOVED_PROVIDER_IDS.has(id)) throw new Error(`Custom provider "${id}" uses a removed provider ID`);
-            const provider = this.createCustomProvider(id, profile);
-            providers.set(id, provider);
-            models.setProvider(provider);
+            providers.set(id, this.createCustomProvider(id, profile));
         }
 
-        await models.refresh({ allowNetwork: false });
-        this.snapshot = { models, providers, customProfiles };
+        // No refresh may outlive the snapshot it started from. Aborting stops new catalog writes,
+        // but pi-ai races each refresh against the abort signal, so an already-started store write
+        // can still be running after the refresh promise resolves. Drain the writes themselves
+        // through the shared tracker, then drop catalogs tagged for the previous declarations.
+        const outgoing = this.snapshot;
+        outgoing?.refreshAbort.abort();
+        try {
+            const modelsStore = this.createCatalogStore(fingerprints);
+            await modelsStore.drain();
+            await modelsStore.purgeMismatched(fingerprints.keys());
+
+            const models = createModels({ credentials, modelsStore });
+            for (const provider of providers.values()) models.setProvider(provider);
+
+            // Offline restore replays only catalogs whose embedded fingerprint matches this
+            // candidate; a catalog from an earlier declaration reads as absent, so an edit can
+            // never stay shadowed by its own old cache.
+            await models.refresh({ allowNetwork: false });
+            this.snapshot = { models, providers, customProfiles, refreshAbort: new AbortController() };
+        } catch (error) {
+            // A step above can fail (storage error) after the outgoing snapshot was aborted. Abort
+            // is irreversible, so hand the retained snapshot a fresh controller — otherwise every
+            // later refreshModels() would silently no-op against an aborted signal.
+            if (outgoing) outgoing.refreshAbort = new AbortController();
+            throw error;
+        }
     }
 
     resolveSelection(selection: ModelSelection): ModelSelection & { modelInfo: ModelInfo } {
@@ -230,12 +269,20 @@ export class LlmProviderService {
     }
 
     async refreshModels(): Promise<ReadonlyMap<string, Error>> {
-        const result = await this.requireSnapshot().models.refresh({ allowNetwork: true, force: true });
+        const snapshot = this.requireSnapshot();
+        // A superseded snapshot never refreshes: reload aborts this controller, and a call that
+        // slips in during the swap returns without resurrecting the stale catalog.
+        if (snapshot.refreshAbort.signal.aborted) return new Map();
+        const result = await snapshot.models.refresh({
+            allowNetwork: true,
+            force: true,
+            signal: snapshot.refreshAbort.signal,
+        });
         return result.errors;
     }
 
     async deleteCachedModels(provider: string): Promise<void> {
-        await this.requireModelsStore().delete(provider);
+        await this.createCatalogStore(new Map()).delete(provider);
     }
 
     getCredentialStore(): VsCodeCredentialStore {
@@ -616,8 +663,9 @@ export class LlmProviderService {
         return this.credentialStore;
     }
 
-    private requireModelsStore(): VsCodeModelsStore {
-        if (!this.modelsStore) throw new Error('LLM model store has not been initialized');
-        return this.modelsStore;
+    /** One snapshot's view of the catalog store, keyed by that snapshot's declared fingerprints. */
+    private createCatalogStore(fingerprints: ReadonlyMap<string, string>): VsCodeModelsStore {
+        if (!this.globalState) throw new Error('LLM model store has not been initialized');
+        return new VsCodeModelsStore(this.globalState, fingerprints, this.catalogMutations);
     }
 }
