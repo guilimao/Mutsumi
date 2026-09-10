@@ -67,7 +67,7 @@ RenderBlock = content | reasoning(collapsed) | toolCall(isStreaming, result?)
 `AgentRunner` 侧的流式状态机，保证"已提交块不重渲"：
 
 - **L1（轮次）**：`commitRoundUI()` 把整轮剩余内容锁入 committed
-- **L2（轮内）**：content 出现 → reasoning 锁定；tools 出现 → content 锁定
+- **L2（轮内）**：content 出现 → reasoning 锁定；SDK 出现新的 content 块 → 前一个文本块锁定（因此「文本 A → 工具调用 → 文本 B」的续写文本不会被整轮锁定吞掉）
 - **L3（工具）**：`appendBlock()` 提交单个完成的工具调用
 
 ### 2.4 工具栏与命令（`notebook/toolbar.ts` + `commands/`）

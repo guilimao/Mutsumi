@@ -31,10 +31,17 @@ export const REASONING_EFFORT_SETTING_VALUES: readonly ReasoningEffortSetting[] 
 /** Re-exported so agent-side consumers keep importing the vocabulary from one module. */
 export { MODEL_THINKING_LEVELS } from '../llm/thinkingLevels';
 
-/** Pre-v1.3 persisted vocabulary; mapped on read so legacy `.mtm` files keep working. */
-const LEGACY_REASONING_EFFORT_ALIASES: Readonly<Record<string, ReasoningEffort>> = {
-    none: 'off'
-};
+/**
+ * Pre-v1.3 persisted vocabulary; mapped on read so legacy `.mtm` files keep working.
+ * @param {string} value - Any configured or persisted reasoning effort string
+ * @returns {string} The SDK level for a legacy alias, otherwise the value untouched
+ * @remarks An explicit comparison rather than a lookup table: indexing a plain object also
+ * answers for `Object.prototype` members (`constructor`, `toString`, `__proto__`), which would
+ * leak a function or object out of a string-in/string-out normalizer.
+ */
+function applyLegacyReasoningEffortAlias(value: string): string {
+    return value === 'none' ? 'off' : value;
+}
 
 /**
  * Normalizes a configured reasoning effort for request transmission without mutating the value.
@@ -50,7 +57,7 @@ const LEGACY_REASONING_EFFORT_ALIASES: Readonly<Record<string, ReasoningEffort>>
  */
 export function normalizeReasoningEffort(value: string | undefined | null): string | undefined {
     if (value === null || value === undefined || value === '' || value === 'default') return undefined;
-    return LEGACY_REASONING_EFFORT_ALIASES[value] ?? value;
+    return applyLegacyReasoningEffortAlias(value);
 }
 
 /**
@@ -59,7 +66,7 @@ export function normalizeReasoningEffort(value: string | undefined | null): stri
  * are always written back in canonical form.
  */
 export function canonicalReasoningEffortSetting(value: string): string {
-    return LEGACY_REASONING_EFFORT_ALIASES[value] ?? value;
+    return applyLegacyReasoningEffortAlias(value);
 }
 
 /**

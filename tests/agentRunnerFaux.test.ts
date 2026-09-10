@@ -165,6 +165,38 @@ describe('AgentRunner over the pi-ai faux provider', () => {
         });
     });
 
+    it('renders prose written after a tool call instead of dropping it', async () => {
+        // The SDK emits one text block per contiguous run of visible text, so this turn streams
+        // text A, a tool call, then text B. Locking the whole round on A used to lose B from the
+        // live output while the persisted message still carried it.
+        faux().setResponses([
+            fauxAssistantMessage(
+                [fauxText('before'), fauxToolCall('read', { path: 'a.ts' }), fauxText('after')],
+                { stopReason: 'toolUse' },
+            ),
+            fauxAssistantMessage([fauxText('done')]),
+        ]);
+
+        const { runner, session } = createRunner();
+        const result = await runner.run(new AbortController(), {
+            messages: [{ role: 'user', content: 'go', timestamp: 1 }],
+        });
+
+        expect(result.status).toBe('completed');
+        const first = result.messages[0];
+        expect(first.role === 'assistant' ? first.content.map(block => block.type) : [])
+            .toEqual(['text', 'toolCall', 'text']);
+
+        // Both runs of prose reach the live frames, in SDK content-block order, and survive the
+        // round commit that precedes tool execution.
+        const frames = (session.replaceOutput.mock.calls as unknown as [string, unknown][])
+            .map(call => JSON.parse(call[0]) as { active: { content: string } | null; committed: { type: string; markdown?: string }[] });
+        expect(frames.some(frame => frame.active?.content === 'after')).toBe(true);
+        expect(frames.at(-1)?.committed
+            .filter(block => block.type === 'content')
+            .map(block => block.markdown)).toEqual(['before', 'after', 'done']);
+    });
+
     it('reports failure when the provider responds with an error assistant message', async () => {
         faux().setResponses([fauxAssistantMessage([fauxText('never seen')], {
             stopReason: 'error',

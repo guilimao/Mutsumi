@@ -23,6 +23,7 @@ import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage, type Persiste
 import { extractNotebookNotes, buildInteractionRenderBlocks, genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
 import { UIRenderer } from '../src/agent/uiRenderer';
 import { toBlockUsage } from '../src/notebook/renderTypes';
+import type { RenderBlock } from '../src/notebook/renderTypes';
 import { parseUserMessageWithImages } from '../src/contextManagement/utils';
 import { hydrateProviderMessage, mergeConsecutiveUserMessages } from '../src/contextManagement/history';
 
@@ -240,8 +241,8 @@ describe('serializer hydration usage blocks (parity with the live UIRenderer pat
 
     it('matches the live UIRenderer block order for a content-plus-tool round', () => {
         const renderer = new UIRenderer();
-        renderer.updateActive('calling tools', '', []);
-        renderer.commitRoundUI('calling tools', '', toBlockUsage(usage as any));
+        renderer.updateActive(['calling tools'], '', []);
+        renderer.commitRoundUI(['calling tools'], '', toBlockUsage(usage as any));
         for (const name of ['read', 'grep']) {
             renderer.appendBlock({ type: 'toolCall', name, args: {}, summary: name, isStreaming: false });
         }
@@ -252,6 +253,23 @@ describe('serializer hydration usage blocks (parity with the live UIRenderer pat
             { type: 'toolCall', id: 'call-2', name: 'grep', arguments: { pattern: 'x' } },
         ])], false).map(block => block.type);
         expect(hydrated).toEqual(live);
+    });
+
+    it('matches the live UIRenderer order when prose resumes after a tool call', () => {
+        const renderer = new UIRenderer();
+        renderer.updateActive(['before'], '', []);
+        renderer.updateActive(['before', 'after'], '', []);
+        renderer.commitRoundUI(['before', 'after'], '', toBlockUsage(usage as any));
+        renderer.appendBlock({ type: 'toolCall', name: 'read', args: {}, summary: 'read', isStreaming: false });
+        const live = renderer.getCommittedRenderData().committed;
+        const hydrated = buildInteractionRenderBlocks([assistantWith([
+            { type: 'text', text: 'before' },
+            { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
+            { type: 'text', text: 'after' },
+        ])], false);
+        expect(hydrated.map(block => block.type)).toEqual(live.map(block => block.type));
+        expect(live.filter((block): block is Extract<RenderBlock, { type: 'content' }> => block.type === 'content')
+            .map(block => block.markdown)).toEqual(['before', 'after']);
     });
 
     it('appends the usage block after content-only rounds', () => {

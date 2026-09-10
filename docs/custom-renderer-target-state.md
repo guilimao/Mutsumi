@@ -53,7 +53,7 @@ export interface RenderData {
 - L1 跨轮锁定: `commitRoundUI()` → 所有 active 内容移入 committed
 - L2 轮内子段锁定:
   - reasoning → locked 当 content 开始到达
-  - content → locked 当原生 `toolCall` 内容块开始到达
+  - 文本块 → locked 当 SDK 追加下一个 content 块（含 toolCall）
 - L3 工具级锁定: 每个工具执行完毕后 appendBlock 到 committed，前一个工具自然锁定
 
 **公开接口：**
@@ -61,16 +61,16 @@ export interface RenderData {
 class UIRenderer {
   private committedBlocks: RenderBlock[];
   private activeReasoning: string;
-  private activeContent: string;
+  private contentBlocks: string[];        // 本轮全部文本块，按 SDK content 顺序
+  private committedContentCount: number;  // 已锁定的前导文本块数
   private activeTools: RenderBlock[];
   private reasoningLocked: boolean;
-  private contentLocked: boolean;
 
   // 流式回调中调用，自动检测锁转换
-  updateActive(content: string, reasoning: string, pendingTools: RenderBlock[]): RenderData;
+  updateActive(contentBlocks: string[], reasoning: string, pendingTools: RenderBlock[]): RenderData;
 
-  // 流结束时调用，锁定本轮所有内容
-  commitRoundUI(content: string, reasoning: string): void;
+  // 流结束时调用，锁定本轮剩余内容
+  commitRoundUI(contentBlocks: string[], reasoning: string): void;
 
   // 工具执行完毕后追加到 committed
   appendBlock(block: RenderBlock): void;

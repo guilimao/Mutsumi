@@ -92,7 +92,7 @@ active 区域从"每帧清空重建"改为简化版 keyed reconciliation。每�
 
 ### 5.2 committed/active 分割：角色重定位（保留）
 
-建立 DOM 复用能力后，committed/active 分割与三级锁定（L1 轮结束 / L2 轮内 reasoning→content→tools / L3 工具完成）从"渲染性能机制"重新定位为：
+建立 DOM 复用能力后，committed/active 分割与三级锁定（L1 轮结束 / L2 轮内按 SDK 内容块推进 reasoning→content→tools / L3 工具完成）从"渲染性能机制"重新定位为：
 
 1. **解析范围限定器**：committed 部分连 micromark 都不参与——每帧解析与临时构建成本为 O(active 长度) 而非 O(会话总长度)。这是 DOM 复用无法替代的独立节省；
 2. **强不变性承诺**：契约级"不再变化"，渲染端对 committed 跳过一切对齐验证、append-only 追加。对齐算法的正确性负担被压缩在很小的 active 区域内；

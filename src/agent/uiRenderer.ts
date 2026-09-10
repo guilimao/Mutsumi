@@ -15,42 +15,46 @@ import type { ToolCall } from '@earendil-works/pi-ai';
  * @description Maintains a committed block list (locked, rendered once) plus an
  * active streaming area (re-rendered per token). Three locking levels:
  * - L1 (round): commitRoundUI() moves all remaining active content into committed.
- * - L2 (intra-round): reasoning locks when content starts; content locks when tools start.
+ * - L2 (intra-round): reasoning locks when content starts; each text block locks once the
+ *   next SDK content block supersedes it.
  * - L3 (tool): appendBlock() commits each finished tool call.
  * @class UIRenderer
  * @example
  * const renderer = new UIRenderer();
- * const data = renderer.updateActive(content, reasoning, pendingTools);
- * renderer.commitRoundUI(finalContent, finalReasoning);
+ * const data = renderer.updateActive(contentBlocks, reasoning, pendingTools);
+ * renderer.commitRoundUI(finalContentBlocks, finalReasoning);
  */
 export class UIRenderer {
     /** Locked blocks, rendered once and never re-rendered */
     private committedBlocks: RenderBlock[] = [];
     /** Streaming reasoning for the current round (emptied once locked) */
     private activeReasoning: string = '';
-    /** Streaming content for the current round (emptied once locked) */
-    private activeContent: string = '';
+    /** Every text block of the current round, in SDK content-block order */
+    private contentBlocks: string[] = [];
+    /** How many leading contentBlocks are already locked into committed */
+    private committedContentCount: number = 0;
     /** Streaming (pending) tool calls for the current round */
     private activeTools: RenderBlock[] = [];
     /** Whether the current round's reasoning has been locked into committed */
     private reasoningLocked: boolean = false;
-    /** Whether the current round's content has been locked into committed */
-    private contentLocked: boolean = false;
 
     /**
      * Updates the active streaming area, auto-detecting L2 lock transitions.
      * @description Called on each streaming progress callback with the round's
      * accumulated values. When content first arrives, any accumulated reasoning
-     * is locked into committed; when pending tools first arrive, any accumulated
-     * content is locked into committed.
-     * @param {string} content - Accumulated content for the current round
+     * is locked into committed; every text block the SDK has moved past is locked
+     * too, so a message that resumes writing after a tool call (text A -> tool call ->
+     * text B) keeps both runs of text instead of locking the whole round on the first one.
+     * @param {string[]} contentBlocks - Text of each content block of the current round, in order
      * @param {string} reasoning - Accumulated reasoning for the current round
      * @param {RenderBlock[]} pendingTools - Pending (streaming) tool call blocks
      * @returns {RenderData} Full render data for replaceOutput
      */
-    updateActive(content: string, reasoning: string, pendingTools: RenderBlock[]): RenderData {
-        // L2: content started → reasoning is complete, lock it
-        if (!this.reasoningLocked && content.length > 0 && this.activeReasoning.length > 0) {
+    updateActive(contentBlocks: string[], reasoning: string, pendingTools: RenderBlock[]): RenderData {
+        // L2: visible content started → reasoning is complete, lock it. An empty block (an SDK
+        // `text_start` that has not emitted a delta yet) is not content the user can see.
+        const hasVisibleContent = contentBlocks.some(text => text.length > 0);
+        if (!this.reasoningLocked && hasVisibleContent && this.activeReasoning.length > 0) {
             this.committedBlocks.push({
                 type: 'reasoning',
                 markdown: this.activeReasoning,
@@ -59,15 +63,12 @@ export class UIRenderer {
             this.activeReasoning = '';
             this.reasoningLocked = true;
         }
-        // L2: tools started → content is complete, lock it
-        if (!this.contentLocked && pendingTools.length > 0 && this.activeContent.length > 0) {
-            this.committedBlocks.push({ type: 'content', markdown: this.activeContent });
-            this.activeContent = '';
-            this.contentLocked = true;
-        }
+        this.contentBlocks = contentBlocks;
+        // L2: a text block is complete as soon as a later content block exists. The SDK only
+        // appends, so everything but the trailing block is final.
+        this.commitContentBlocks(Math.max(contentBlocks.length - 1, 0));
         // Keep only the still-unlocked sections in the active area
         this.activeReasoning = this.reasoningLocked ? '' : reasoning;
-        this.activeContent = this.contentLocked ? '' : content;
         this.activeTools = pendingTools;
         return this.getRenderData();
     }
@@ -75,11 +76,11 @@ export class UIRenderer {
     /**
      * L1 lock: commits all remaining active content at round end.
      * @description Called after the stream completes (before tool execution).
-     * Commits anything still active; the content/reasoning arguments serve as a
+     * Commits anything still active; the block/reasoning arguments serve as a
      * fallback for sections that never passed through updateActive. Per-round
      * state is then reset for the next round. When usage is provided it is appended
      * as a dedicated usage block (see {@link appendUsage}).
-     * @param {string} content - Final accumulated content of the round
+     * @param {string[]} contentBlocks - Final text blocks of the round, in order
      * @param {string} reasoning - Final accumulated reasoning of the round
      * @param {BlockUsage} [usage] - Token/cost of the assistant message that produced this round
      *
@@ -87,9 +88,8 @@ export class UIRenderer {
      * the round's tool blocks, which are appended later during tool execution), and reasoning-only
      * rounds. .mtm hydration mirrors this order in serializer.buildInteractionRenderBlocks.
      */
-    commitRoundUI(content: string, reasoning: string, usage?: BlockUsage): void {
+    commitRoundUI(contentBlocks: string[], reasoning: string, usage?: BlockUsage): void {
         const pendingReasoning = this.reasoningLocked ? '' : (this.activeReasoning || reasoning);
-        const pendingContent = this.contentLocked ? '' : (this.activeContent || content);
         if (pendingReasoning) {
             this.committedBlocks.push({
                 type: 'reasoning',
@@ -97,15 +97,30 @@ export class UIRenderer {
                 collapsed: true
             });
         }
-        if (pendingContent) {
-            this.committedBlocks.push({ type: 'content', markdown: pendingContent });
-        }
+        // The caller's final block list is authoritative; a round whose stream never reported
+        // progress has no tracked blocks at all and is rendered from this fallback alone.
+        if (contentBlocks.length > 0) this.contentBlocks = contentBlocks;
+        this.commitContentBlocks(this.contentBlocks.length);
         this.appendUsage(usage);
         this.reasoningLocked = false;
-        this.contentLocked = false;
         this.activeReasoning = '';
-        this.activeContent = '';
+        this.contentBlocks = [];
+        this.committedContentCount = 0;
         this.activeTools = [];
+    }
+
+    /**
+     * Locks every tracked text block below the given block count into committed.
+     * @description Empty blocks carry nothing to render and are skipped; they still advance
+     * the commit cursor so block indices stay aligned with the SDK's content array.
+     * @param {number} upTo - Number of leading content blocks that are final
+     */
+    private commitContentBlocks(upTo: number): void {
+        while (this.committedContentCount < upTo) {
+            const markdown = this.contentBlocks[this.committedContentCount];
+            this.committedContentCount++;
+            if (markdown) this.committedBlocks.push({ type: 'content', markdown });
+        }
     }
 
     /**
@@ -192,14 +207,17 @@ export class UIRenderer {
      * @returns {RenderData} Current render data; active is null when nothing is streaming
      */
     getRenderData(): RenderData {
+        const activeContent = this.committedContentCount < this.contentBlocks.length
+            ? this.contentBlocks[this.contentBlocks.length - 1]
+            : '';
         const hasActive = this.activeReasoning.length > 0 ||
-                          this.activeContent.length > 0 ||
+                          activeContent.length > 0 ||
                           this.activeTools.length > 0;
         return {
             committed: [...this.committedBlocks],
             active: hasActive ? {
                 reasoning: this.activeReasoning,
-                content: this.activeContent,
+                content: activeContent,
                 pendingTools: [...this.activeTools]
             } : null
         };

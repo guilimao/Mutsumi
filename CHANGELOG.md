@@ -69,3 +69,12 @@ All notable user-visible changes are recorded here. The format follows
   current declaration. Previously the missing fingerprint was treated as "unchanged", so
   the stale catalog kept shadowing the newly declared capabilities until a successful
   network refresh.
+- A round that keeps writing after a tool call no longer loses that text in the live cell
+  output. Rendering now tracks each assistant round per SDK content block instead of
+  locking the whole round when the first block is done, so "text → tool call → more text"
+  shows both runs of prose while streaming and commits them in the same order a reopened
+  `.mtm` file rebuilds.
+- A reasoning-effort value that collides with an `Object` member (`constructor`,
+  `toString`, `__proto__`) is passed through as the unknown string it is, instead of
+  surfacing a function or object from the legacy alias lookup in error messages and the
+  available-levels display.

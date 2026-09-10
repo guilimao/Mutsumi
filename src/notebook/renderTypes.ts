@@ -73,6 +73,8 @@ export function toBlockUsage(usage: Usage | undefined): BlockUsage | undefined {
  * block follows the blocks of the assistant round it belongs to; it is committed when the
  * round commits, which is before that round's tool blocks (those are appended as each tool
  * finishes), because the usage belongs to the assistant message, not to the tool results.
+ * - **content**: markdown prose. One block per assistant text block, in SDK order, so prose that
+ *   resumes after a tool call renders as its own block instead of merging into the first run.
  * Blocks in {@link RenderData.committed} are locked and never re-rendered.
  */
 export type RenderBlock =
@@ -112,6 +114,7 @@ export interface RenderData {
     /** Current streaming area, re-rendered on each token update; null when idle */
     active: {
         reasoning: string;
+        /** Text of the still-open trailing content block, if any */
         content: string;
         pendingTools: RenderBlock[];
     } | null;

@@ -27,8 +27,8 @@ function toolBlock(name: string): RenderBlock {
 describe('UIRenderer usage blocks', () => {
     it('appends the round usage block after committed content', () => {
         const renderer = new UIRenderer();
-        renderer.updateActive('all done', '', []);
-        renderer.commitRoundUI('all done', '', usage);
+        renderer.updateActive(['all done'], '', []);
+        renderer.commitRoundUI(['all done'], '', usage);
         const data = renderer.getCommittedRenderData();
         expect(data.committed).toEqual([
             expect.objectContaining({ type: 'content', markdown: 'all done' }),
@@ -39,7 +39,7 @@ describe('UIRenderer usage blocks', () => {
     it('emits the usage block of a tool round before the tool blocks it owns', () => {
         const renderer = new UIRenderer();
         // Tool round: nothing was pending at commit time (no content/reasoning to commit).
-        renderer.commitRoundUI('', '', usage);
+        renderer.commitRoundUI([], '', usage);
         renderer.appendBlock(toolBlock('read'));
         renderer.appendBlock(toolBlock('write'));
         const data = renderer.getCommittedRenderData();
@@ -50,8 +50,8 @@ describe('UIRenderer usage blocks', () => {
 
     it('emits one usage block per round and none without usage', () => {
         const renderer = new UIRenderer();
-        renderer.commitRoundUI('', '', usage);
-        renderer.commitRoundUI('second', '', undefined);
+        renderer.commitRoundUI([], '', usage);
+        renderer.commitRoundUI(['second'], '', undefined);
         renderer.appendBlock(toolBlock('read'));
         const data = renderer.getCommittedRenderData();
         expect(data.committed.map(block => block.type)).toEqual(['usage', 'content', 'toolCall']);
@@ -59,8 +59,8 @@ describe('UIRenderer usage blocks', () => {
 
     it('covers reasoning-only rounds', () => {
         const renderer = new UIRenderer();
-        renderer.updateActive('', 'ponder', []);
-        renderer.commitRoundUI('', 'ponder', usage);
+        renderer.updateActive([], 'ponder', []);
+        renderer.commitRoundUI([], 'ponder', usage);
         expect(renderer.getCommittedRenderData().committed.map(block => block.type)).toEqual(['reasoning', 'usage']);
     });
 
@@ -69,6 +69,58 @@ describe('UIRenderer usage blocks', () => {
         renderer.appendUsage(undefined);
         renderer.appendUsage(usage);
         expect(renderer.getCommittedRenderData().committed).toEqual([{ type: 'usage', usage }]);
+    });
+});
+
+describe('UIRenderer content block tracking', () => {
+    it('keeps text written after a tool call instead of losing it to the first block', () => {
+        const renderer = new UIRenderer();
+        // Streaming: text A, then a tool call, then text B (a second SDK content block).
+        renderer.updateActive(['A'], '', []);
+        renderer.updateActive(['A'], '', [toolBlock('read')]);
+        // L2 seals A the moment a later content block shows up; B stays live until round end.
+        const streaming = renderer.updateActive(['A', 'B'], '', [toolBlock('read')]);
+        expect(streaming.committed).toEqual([{ type: 'content', markdown: 'A' }]);
+        expect(streaming.active).toMatchObject({ content: 'B' });
+
+        renderer.commitRoundUI(['A', 'B'], '', usage);
+        for (const name of ['read']) renderer.appendBlock(toolBlock(name));
+        expect(renderer.getCommittedRenderData().committed.map(block => block.type))
+            .toEqual(['content', 'content', 'usage', 'toolCall']);
+    });
+
+    it('keeps reasoning unlocked while the content block is still empty', () => {
+        const renderer = new UIRenderer();
+        // `text_start` arrives before any delta: nothing visible has been written yet, so the
+        // reasoning must not be sealed into a collapsed committed block.
+        const frame = renderer.updateActive([''], 'ponder', []);
+        expect(frame.committed).toEqual([]);
+        expect(frame.active).toMatchObject({ reasoning: 'ponder', content: '' });
+
+        renderer.updateActive(['first words'], 'ponder', []);
+        expect(renderer.getCommittedRenderData().committed.map(block => block.type))
+            .toEqual(['reasoning']);
+    });
+
+    it('commits a single text block only once, at round end', () => {
+        const renderer = new UIRenderer();
+        renderer.updateActive(['growing'], '', [toolBlock('read')]);
+        renderer.updateActive(['growing more'], '', [toolBlock('read')]);
+        renderer.commitRoundUI(['growing more'], '', undefined);
+        const committed = renderer.getCommittedRenderData().committed;
+        expect(committed).toEqual([{ type: 'content', markdown: 'growing more' }]);
+    });
+
+    it('resets per-block tracking between rounds', () => {
+        const renderer = new UIRenderer();
+        renderer.updateActive(['round one'], '', []);
+        renderer.commitRoundUI(['round one'], '', undefined);
+        renderer.updateActive(['round two'], '', []);
+        renderer.commitRoundUI(['round two'], '', undefined);
+        expect(renderer.getCommittedRenderData().committed).toEqual([
+            { type: 'content', markdown: 'round one' },
+            { type: 'content', markdown: 'round two' },
+        ]);
     });
 });
 

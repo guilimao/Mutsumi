@@ -3,12 +3,12 @@
 import { isRetryableAssistantError } from '@earendil-works/pi-ai';
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai';
 import { LLMClient, ProviderStreamError } from './llmClient';
-import { assistantText } from '../llm/messageText';
+import { assistantTextBlocks } from '../llm/messageText';
 import type { ToolDefinition } from '../tools.d/interface';
 import type { AgentMessage } from '../types';
 
 export type StreamProgressCallback = (
-    content: string,
+    contentBlocks: string[],
     reasoning: string,
     toolCalls?: ToolCall[],
 ) => void | Promise<void>;
@@ -17,14 +17,14 @@ export interface StreamResponseResult {
     message: AssistantMessage;
 }
 
-function visible(message: AssistantMessage): { content: string; reasoning: string; toolCalls: ToolCall[] } {
+function visible(message: AssistantMessage): { contentBlocks: string[]; reasoning: string; toolCalls: ToolCall[] } {
     const reasoning: string[] = [];
     const toolCalls: ToolCall[] = [];
     for (const block of message.content) {
         if (block.type === 'thinking') reasoning.push(block.thinking);
         else if (block.type === 'toolCall') toolCalls.push(block);
     }
-    return { content: assistantText(message), reasoning: reasoning.join(''), toolCalls };
+    return { contentBlocks: assistantTextBlocks(message), reasoning: reasoning.join(''), toolCalls };
 }
 
 /**
@@ -87,8 +87,11 @@ export class LLMStreamHandler {
                 if (event.type === 'error') throw new Error(event.error.errorMessage ?? 'Provider stream failed');
                 const partial = event.partial;
                 const projected = visible(partial);
-                emittedPartial ||= projected.content.length > 0 || projected.reasoning.length > 0 || projected.toolCalls.length > 0;
-                if (onProgress) await onProgress(projected.content, projected.reasoning, projected.toolCalls);
+                // An empty text block (`text_start` before any delta) is not visible output, so
+                // only non-empty text counts as "already emitted"; otherwise a retryable failure
+                // that arrives mid-start would be treated as a partial answer and never retried.
+                emittedPartial ||= projected.contentBlocks.some(text => text.length > 0) || projected.reasoning.length > 0 || projected.toolCalls.length > 0;
+                if (onProgress) await onProgress(projected.contentBlocks, projected.reasoning, projected.toolCalls);
             }
         } catch (error) {
             if (emittedPartial) {

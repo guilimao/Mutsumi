@@ -18,7 +18,7 @@ import { debugLogger } from '../debugLogger';
 import { getTitleModelSelection } from '../utils';
 import { AgentRunContext, AgentRunOptions, AgentRunResult } from './types';
 import type { ToolCall } from '@earendil-works/pi-ai';
-import { assistantText } from '../llm/messageText';
+import { assistantTextBlocks } from '../llm/messageText';
 import { t } from '../i18n';
 
 export { AgentRunOptions } from './types';
@@ -127,7 +127,7 @@ export class AgentRunner {
                     messages,
                     this.toolSet.getDefinitions(),
                     abortController.signal,
-                    async (content, reasoning, partialToolCalls) => {
+                    async (contentBlocks, reasoning, partialToolCalls) => {
                         if (this.session.token.isCancellationRequested) {
                             return;
                         }
@@ -138,7 +138,7 @@ export class AgentRunner {
                             isSubAgent
                         );
 
-                        const renderData = this.uiRenderer.updateActive(content, reasoning, pendingTools);
+                        const renderData = this.uiRenderer.updateActive(contentBlocks, reasoning, pendingTools);
                         await this.session.replaceOutput(JSON.stringify(renderData), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
                     }
                 );
@@ -188,7 +188,8 @@ export class AgentRunner {
 
             const thinkingBlocks = assistantMessage.content.filter(block => block.type === 'thinking');
             const toolCalls = assistantMessage.content.filter((block): block is ToolCall => block.type === 'toolCall');
-            const roundContent = assistantText(assistantMessage);
+            const roundContentBlocks = assistantTextBlocks(assistantMessage);
+            const roundContent = roundContentBlocks.join('');
             const roundReasoning = thinkingBlocks.map(block => block.thinking).join('');
 
             const roundMessageStart = messages.length;
@@ -204,12 +205,12 @@ export class AgentRunner {
             }
 
             if (toolCalls.length === 0) {
-                this.uiRenderer.commitRoundUI(roundContent, roundReasoning, toBlockUsage(assistantMessage.usage));
+                this.uiRenderer.commitRoundUI(roundContentBlocks, roundReasoning, toBlockUsage(assistantMessage.usage));
                 await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
                 break;
             }
 
-            this.uiRenderer.commitRoundUI(roundContent, roundReasoning, toBlockUsage(assistantMessage.usage));
+            this.uiRenderer.commitRoundUI(roundContentBlocks, roundReasoning, toBlockUsage(assistantMessage.usage));
 
             let result: ToolExecutionResult;
             try {
