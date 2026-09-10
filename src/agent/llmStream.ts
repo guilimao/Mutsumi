@@ -13,8 +13,20 @@ export type StreamProgressCallback = (
     toolCalls?: ToolCall[],
 ) => void | Promise<void>;
 
+/**
+ * Wall-clock measurements of one streamed response, captured per attempt (a retry starts a
+ * fresh clock so the reported numbers describe the attempt whose message is returned).
+ */
+export interface RoundTiming {
+    /** Ms from request dispatch to the first token the user could see; absent if none arrived. */
+    ttftMs?: number;
+    /** Ms spent streaming output after the first token. */
+    generationMs?: number;
+}
+
 export interface StreamResponseResult {
     message: AssistantMessage;
+    timing: RoundTiming;
 }
 
 function visible(message: AssistantMessage): { contentBlocks: string[]; reasoning: string; toolCalls: ToolCall[] } {
@@ -77,9 +89,23 @@ export class LLMStreamHandler {
         onProgress?: StreamProgressCallback,
     ): Promise<StreamResponseResult> {
         let emittedPartial = false;
+        // Timers bracket the stream itself: the request begins when the generator is first
+        // pulled (the for-await below), and the first visible token ends the time-to-first-token
+        // window. Both are wall-clock, deliberately not SDK timestamps (message.timestamp is
+        // request creation, not token arrival).
+        const requestStart = Date.now();
+        let firstTokenAt: number | undefined;
         try {
             for await (const event of this.llmClient.streamChatCompletion({ systemPrompt, messages, tools, signal })) {
-                if (event.type === 'done') return { message: event.message };
+                if (event.type === 'done') {
+                    const doneAt = Date.now();
+                    return {
+                        message: event.message,
+                        timing: firstTokenAt === undefined
+                            ? {}
+                            : { ttftMs: firstTokenAt - requestStart, generationMs: doneAt - firstTokenAt },
+                    };
+                }
                 // LLMClient converts SDK 'error' events into a thrown providerError (carrying
                 // the AssistantMessage for retry classification) before yielding, so this branch
                 // is unreachable in practice; it doubles as the narrowing guard that keeps
@@ -90,7 +116,11 @@ export class LLMStreamHandler {
                 // An empty text block (`text_start` before any delta) is not visible output, so
                 // only non-empty text counts as "already emitted"; otherwise a retryable failure
                 // that arrives mid-start would be treated as a partial answer and never retried.
-                emittedPartial ||= projected.contentBlocks.some(text => text.length > 0) || projected.reasoning.length > 0 || projected.toolCalls.length > 0;
+                const hasVisibleOutput = projected.contentBlocks.some(text => text.length > 0)
+                    || projected.reasoning.length > 0
+                    || projected.toolCalls.length > 0;
+                if (hasVisibleOutput) firstTokenAt ??= Date.now();
+                emittedPartial ||= hasVisibleOutput;
                 if (onProgress) await onProgress(projected.contentBlocks, projected.reasoning, projected.toolCalls);
             }
         } catch (error) {

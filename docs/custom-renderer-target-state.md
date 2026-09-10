@@ -18,6 +18,8 @@ export type RenderBlock =
   | {
       type: 'toolCall';
       name: string;
+      /** Provider tool-call ID，用于完成块消解 active 区对应的占位块（id 精确匹配，name/队首为回退） */
+      toolCallId?: string;
       args: Record<string, any>;
       summary: string;
       result?: string;
@@ -54,7 +56,7 @@ export interface RenderData {
 - L2 轮内子段锁定:
   - reasoning → locked 当 content 开始到达
   - 文本块 → locked 当 SDK 追加下一个 content 块（含 toolCall）
-- L3 工具级锁定: 每个工具执行完毕后 appendBlock 到 committed，前一个工具自然锁定
+- L3 工具级锁定: 每个工具执行完毕后 appendBlock 到 committed，前一个工具自然锁定。轮次提交时 (`commitRoundUI`) 本轮的 pending 工具占位块会保留在 active 区，直到各自的完成块按 `toolCallId`（回退：同名 → 队首）被 commit 时替换；否则提交到工具执行之间的空档会让“正在运行”的工具调用闪没。`run()` 的 finally 调用 `endRun()` 作为**唯一的终结发布点**（完成/取消/失败同一路径）：丢弃仍未消解的占位块，保留 active 区的部分回答，返回该终结帧。
 
 **公开接口：**
 ```typescript
@@ -69,20 +71,24 @@ class UIRenderer {
   // 流式回调中调用，自动检测锁转换
   updateActive(contentBlocks: string[], reasoning: string, pendingTools: RenderBlock[]): RenderData;
 
-  // 流结束时调用，锁定本轮剩余内容
-  commitRoundUI(contentBlocks: string[], reasoning: string): void;
+  // 流结束时调用，锁定本轮剩余内容，并追加该轮用量块（usage 省略时不追加）
+  commitRoundUI(contentBlocks: string[], reasoning: string, usage?: BlockUsage): void;
 
-  // 工具执行完毕后追加到 committed
+  // 失败路径调用：把失败流已显示的部分输出锁进 committed，等价于 commitRoundUI([], '')，不追加用量块
+  commitPartialOutput(): void;
+
+  // 工具执行完毕后追加到 committed；toolCall 块按 toolCallId 消解 active 区对应的 pending 占位块
   appendBlock(block: RenderBlock): void;
 
+  // 运行结束（完成/取消/失败）时调用：终结唯一发布点。丢弃未消解的占位块、保留仍未提交的部分回答
+  // （失败路径的 partial 已由 commitPartialOutput 提交），返回终结帧
+  endRun(): RenderData;
+
   // 格式化工具调用为 RenderBlock（无 HTML）
-  formatToolCall(args, summary, isStreaming, result?, renderingConfig?): RenderBlock;
+  formatToolCall(name, args, summary, isStreaming, result?, renderingConfig?, toolCallId?): RenderBlock;
   formatPendingToolCalls(partialToolCalls, toolSet, isSubAgent?): RenderBlock[];
 
-  // 获取已提交块数组（用于工具回调后更新输出）
-  getCommittedBlocks(): RenderBlock[];
-
-  // 生成完整 RenderData
+  // 生成完整 RenderData（committed + active）
   getRenderData(): RenderData;
 }
 ```

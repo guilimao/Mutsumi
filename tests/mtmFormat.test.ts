@@ -19,7 +19,7 @@ vi.mock('vscode', () => ({
 
 import { toPiContext } from '../src/llm/context';
 import { decodeAgentContext, encodeAgentContext, INVALID_MTM_FILE, UNSUPPORTED_MTM_FORMAT } from '../src/mtmFormat';
-import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage, type PersistedAgentMessage } from '../src/types';
+import { MTM_FORMAT_VERSION, type AgentContext, type AgentMessage, type MutsumiAssistantMessageState, type PersistedAgentMessage } from '../src/types';
 import { extractNotebookNotes, buildInteractionRenderBlocks, genericCellsToMessages, messagesToGenericCells } from '../src/notebook/serializer';
 import { UIRenderer } from '../src/agent/uiRenderer';
 import { toBlockUsage } from '../src/notebook/renderTypes';
@@ -215,11 +215,51 @@ describe(`.mtm format version ${MTM_FORMAT_VERSION}`, () => {
             { type: 'image', mimeType: 'image/png', data: 'AQID' },
         ]);
     });
+
+    it('round-trips Mutsumi-only assistant measurements and strips them before sending', () => {
+        const measured = {
+            ...assistant,
+            mutsumi: { contextWindow: 200_000, ttftMs: 350, generationMs: 1200 },
+        };
+        const source = context([
+            { role: 'user', content: 'read it', timestamp: 1 },
+            measured,
+            {
+                role: 'toolResult', toolCallId: 'call-1', toolName: 'read',
+                content: [{ type: 'text', text: 'contents' }], isError: false, timestamp: 3,
+            },
+        ]);
+        expect(decodeAgentContext(encodeAgentContext(source))).toEqual(source);
+
+        const native = toPiContext(undefined, source.context as AgentMessage[]);
+        expect(native.messages[1]).toEqual(assistant);
+        expect(native.messages[1]).not.toHaveProperty('mutsumi');
+    });
+
+    it('tolerates malformed assistant measurements instead of rejecting the file', () => {
+        const measured = { ...assistant, mutsumi: { ttftMs: -5, contextWindow: 'huge' } } as any;
+        const source = context([
+            { role: 'user', content: 'go', timestamp: 1 },
+            measured,
+            {
+                role: 'toolResult', toolCallId: 'call-1', toolName: 'read',
+                content: [{ type: 'text', text: 'contents' }], isError: false, timestamp: 3,
+            },
+        ]);
+        // Envelope/display data must not brick the session; unusable values are dropped at render.
+        const decoded = decodeAgentContext(encodeAgentContext(source));
+        expect(decoded).toEqual(source);
+        const usageBlock = buildInteractionRenderBlocks(decoded.context.slice(1), false)
+            .find(block => block.type === 'usage');
+        expect(usageBlock).toBeDefined();
+        expect(usageBlock).not.toHaveProperty('usage.ttftMs');
+        expect(usageBlock).not.toHaveProperty('usage.contextWindow');
+    });
 });
 
 describe('serializer hydration usage blocks (parity with the live UIRenderer path)', () => {
     const usage = { input: 100, output: 20, totalTokens: 120, cost: { total: 0.0005 } };
-    const assistantWith = (content: unknown[]): PersistedAgentMessage => ({
+    const assistantWith = (content: unknown[], mutsumi?: MutsumiAssistantMessageState): PersistedAgentMessage => ({
         role: 'assistant',
         api: 'openai-completions',
         provider: 'anthropic',
@@ -227,6 +267,7 @@ describe('serializer hydration usage blocks (parity with the live UIRenderer pat
         content: content as PersistedAgentMessage['content'],
         timestamp: 2,
         usage,
+        ...(mutsumi ? { mutsumi } : {}),
     } as unknown as PersistedAgentMessage);
 
     it('places the usage block before the round tool blocks, as the live path does', () => {
@@ -246,7 +287,7 @@ describe('serializer hydration usage blocks (parity with the live UIRenderer pat
         for (const name of ['read', 'grep']) {
             renderer.appendBlock({ type: 'toolCall', name, args: {}, summary: name, isStreaming: false });
         }
-        const live = renderer.getCommittedRenderData().committed.map(block => block.type);
+        const live = renderer.getRenderData().committed.map(block => block.type);
         const hydrated = buildInteractionRenderBlocks([assistantWith([
             { type: 'text', text: 'calling tools' },
             { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
@@ -261,7 +302,7 @@ describe('serializer hydration usage blocks (parity with the live UIRenderer pat
         renderer.updateActive(['before', 'after'], '', []);
         renderer.commitRoundUI(['before', 'after'], '', toBlockUsage(usage as any));
         renderer.appendBlock({ type: 'toolCall', name: 'read', args: {}, summary: 'read', isStreaming: false });
-        const live = renderer.getCommittedRenderData().committed;
+        const live = renderer.getRenderData().committed;
         const hydrated = buildInteractionRenderBlocks([assistantWith([
             { type: 'text', text: 'before' },
             { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } },
@@ -292,5 +333,15 @@ describe('serializer hydration usage blocks (parity with the live UIRenderer pat
         delete (bare as { usage?: unknown }).usage;
         const blocks = buildInteractionRenderBlocks([bare], false);
         expect(blocks.map(block => block.type)).toEqual(['content']);
+    });
+
+    it('hydrates persisted measurements into the round usage block', () => {
+        const blocks = buildInteractionRenderBlocks([assistantWith(
+            [{ type: 'text', text: 'measured' }],
+            { contextWindow: 200_000, ttftMs: 350, generationMs: 1200 },
+        )], false);
+        expect(blocks.find(block => block.type === 'usage')).toMatchObject({
+            usage: { input: 100, output: 20, contextWindow: 200_000, ttftMs: 350, generationMs: 1200 },
+        });
     });
 });

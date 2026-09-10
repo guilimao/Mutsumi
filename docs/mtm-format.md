@@ -21,7 +21,7 @@ Provider envelope fields such as `usage`, cost, timestamps, stop reason, respons
 
 `notes` is optional. Each entry stores the Markdown source of a user annotation. `beforeUserIndex` is the number of user cells before that note; array order preserves multiple notes in the same gap. Markup notes are restored in the Notebook but never enter Agent history, title generation, compression, ghost-block indexing, or a provider prompt.
 
-System instructions are assembled dynamically and passed through `Context.systemPrompt`; they are never stored as messages. A user message may contain a `mutsumi.ghostBlock` extension. Assistant and tool-result messages may not contain Mutsumi extensions.
+System instructions are assembled dynamically and passed through `Context.systemPrompt`; they are never stored as messages. A user message may carry a `mutsumi.ghostBlock` extension. An assistant message may carry a `mutsumi` extension holding Mutsumi-measured round data (`contextWindow`, `ttftMs`, `generationMs`); these are display-only and treated like other envelope fields — a malformed value is tolerated and dropped at render time, never a reason to reject the file — and the extension is stripped before a provider request like the user extension. Tool-result messages may not contain Mutsumi extensions.
 
 Consecutive user messages are valid pending turns and remain separate on disk and as Code cells. At the provider boundary only, adjacent users are merged with a blank-line separator; multimodal block order is preserved, and the last user's timestamp wins. Merging never crosses an assistant or tool result. A user message is still invalid while a preceding tool call is waiting for its result.
 

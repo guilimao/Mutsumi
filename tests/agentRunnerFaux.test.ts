@@ -123,6 +123,13 @@ describe('AgentRunner over the pi-ai faux provider', () => {
             provider: 'faux-runner',
             model: 'faux-model',
             content: [{ type: 'text', text: 'all done' }],
+            // The round measurements ride on the message itself: the catalog context window
+            // (faux defaults to 128000) and the wall-clock timing from the stream handler.
+            mutsumi: {
+                contextWindow: 128000,
+                ttftMs: expect.any(Number),
+                generationMs: expect.any(Number),
+            },
         });
 
         // Terminal flush: the last output frame commits the round's blocks (content + usage)

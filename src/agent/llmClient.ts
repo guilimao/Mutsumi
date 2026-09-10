@@ -71,6 +71,19 @@ export class LLMClient {
         throw new Error('Provider stream ended without a terminal event');
     }
 
+    /**
+     * Context window of the current model for usage display, or undefined when the model is no
+     * longer resolvable (e.g. the provider catalog was reloaded mid-run). Display-only: a
+     * missing value degrades the indicator, it must never fail the run.
+     */
+    getContextWindow(): number | undefined {
+        try {
+            return LlmProviderService.getInstance().prepare(this.provider, this.model).model.contextWindow;
+        } catch {
+            return undefined;
+        }
+    }
+
     setModel(model: string): void {
         this.model = model;
     }

@@ -5,9 +5,9 @@
 
 import * as vscode from 'vscode';
 import { ToolSet } from '../tools.d/toolManager';
-import { AgentMessage } from '../types';
+import { AgentMessage, MutsumiAssistantMessageState } from '../types';
 import { UIRenderer } from './uiRenderer';
-import { MUTSUMI_AGENT_CHAT_MIME, RenderBlock, toBlockUsage } from '../notebook/renderTypes';
+import { MUTSUMI_AGENT_CHAT_MIME, RenderBlock, RenderData, toBlockUsage } from '../notebook/renderTypes';
 import { LLMStreamHandler } from './llmStream';
 import { ToolExecutor, type ToolExecutionResult } from './toolExecutor';
 import { TitleGenerator } from './titleGenerator';
@@ -49,6 +49,8 @@ export class AgentRunner {
     private session: IAgentSession;
     /** Tool set for this agent instance */
     private toolSet: ToolSet;
+    /** True once a render frame has failed to publish; later failures stay unlogged */
+    private publishFailureLogged = false;
 
     /**
      * Creates a new AgentRunner instance.
@@ -108,178 +110,202 @@ export class AgentRunner {
 
         const messages = [...initialContext.messages];
         const newMessages: AgentMessage[] = [];
+        // Static for the whole run; resolved once so provider-catalog churn cannot split it
+        // between rounds. Undefined only when the model is unresolvable, which the request
+        // itself would surface anyway.
+        const contextWindow = this.llmClient.getContextWindow();
         let loopCount = 0;
         let status: AgentRunResult['status'] = 'completed';
         let failure: AgentRunResult['error'];
 
-        while (loopCount < this.maxLoops) {
-            if (this.session.token.isCancellationRequested) {
-                status = 'cancelled';
-                break;
-            }
-            loopCount++;
+        try {
+            while (loopCount < this.maxLoops) {
+                if (this.session.token.isCancellationRequested) {
+                    status = 'cancelled';
+                    break;
+                }
+                loopCount++;
 
-            let assistantMessage: Extract<AgentMessage, { role: 'assistant' }>;
+                let assistantMessage: Extract<AgentMessage, { role: 'assistant' }>;
 
-            try {
-                const result = await this.llmStreamHandler.streamResponse(
-                    initialContext.systemPrompt,
-                    messages,
-                    this.toolSet.getDefinitions(),
-                    abortController.signal,
-                    async (contentBlocks, reasoning, partialToolCalls) => {
-                        if (this.session.token.isCancellationRequested) {
-                            return;
+                try {
+                    const result = await this.llmStreamHandler.streamResponse(
+                        initialContext.systemPrompt,
+                        messages,
+                        this.toolSet.getDefinitions(),
+                        abortController.signal,
+                        async (contentBlocks, reasoning, partialToolCalls) => {
+                            if (this.session.token.isCancellationRequested) {
+                                return;
+                            }
+
+                            const pendingTools = this.uiRenderer.formatPendingToolCalls(
+                                partialToolCalls,
+                                this.toolSet,
+                                isSubAgent
+                            );
+
+                            const renderData = this.uiRenderer.updateActive(contentBlocks, reasoning, pendingTools);
+                            await this.publishFrame(renderData);
                         }
+                    );
+                    assistantMessage = result.message;
+                    // Attach Mutsumi-only round measurements for the usage indicator. They travel with
+                    // the message into the next request and to disk; toPiContext strips them at the
+                    // provider boundary, the .mtm validator passes them through as opaque envelope
+                    // data, and toBlockUsage sanitizes them before they reach the footer.
+                    const measurements: MutsumiAssistantMessageState = {
+                        ...(contextWindow !== undefined ? { contextWindow } : {}),
+                        ...(result.timing.ttftMs !== undefined ? { ttftMs: result.timing.ttftMs } : {}),
+                        ...(result.timing.generationMs !== undefined ? { generationMs: result.timing.generationMs } : {}),
+                    };
+                    if (Object.keys(measurements).length > 0) assistantMessage.mutsumi = measurements;
+                } catch (error: any) {
+                    // Handle network/API errors gracefully
+                    const isCancellation =
+                        error.name === 'APIUserAbortError' ||
+                        error.name === 'AbortError' ||
+                        abortController.signal.aborted;
 
-                        const pendingTools = this.uiRenderer.formatPendingToolCalls(
-                            partialToolCalls,
-                            this.toolSet,
-                            isSubAgent
-                        );
-
-                        const renderData = this.uiRenderer.updateActive(contentBlocks, reasoning, pendingTools);
-                        await this.session.replaceOutput(JSON.stringify(renderData), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
+                    if (isCancellation) {
+                        status = 'cancelled';
+                        break;
                     }
-                );
-                assistantMessage = result.message;
-            } catch (error: any) {
-                // Handle network/API errors gracefully
-                const isCancellation = 
-                    error.name === 'APIUserAbortError' ||
-                    error.name === 'AbortError' ||
-                    abortController.signal.aborted;
 
-                if (isCancellation) {
+                    // Network/API error - show notification and preserve history
+                    const errorMessage = error.message || String(error);
+                    status = 'failed';
+                    failure = {
+                        code: typeof error.code === 'string' && error.code ? error.code : 'LLM_STREAM_ERROR',
+                        message: errorMessage,
+                    };
+                    console.error('LLM Stream Error:', error);
+
+                    // Show error as VSCode notification (non-modal)
+                    const copyDetailsBtn = t('controller.copyDetails');
+                    vscode.window.showErrorMessage(
+                        t('agentRunner.llmError', errorMessage),
+                        copyDetailsBtn
+                    ).then(selection => {
+                        if (selection === copyDetailsBtn) {
+                            vscode.env.clipboard.writeText(error.stack || errorMessage);
+                        }
+                    });
+
+                    const errorMarkdown = `\n\n> ⚠️ **Error**: ${errorMessage.replace(/\n/g, ' ')}\n\n*Execution stopped due to network error. Previous output is preserved above.*`;
+                    // Lock whatever the failed stream already showed so the error lands below it,
+                    // then let the single terminal frame (run()'s finally) publish the result.
+                    this.uiRenderer.commitPartialOutput();
+                    this.uiRenderer.appendBlock({ type: 'content', markdown: errorMarkdown });
+
+                    break;
+                }
+
+                const thinkingBlocks = assistantMessage.content.filter(block => block.type === 'thinking');
+                const toolCalls = assistantMessage.content.filter((block): block is ToolCall => block.type === 'toolCall');
+                const roundContentBlocks = assistantTextBlocks(assistantMessage);
+                const roundContent = roundContentBlocks.join('');
+                const roundReasoning = thinkingBlocks.map(block => block.thinking).join('');
+
+                const roundMessageStart = messages.length;
+                const newRoundStart = newMessages.length;
+                messages.push(assistantMessage);
+                newMessages.push(assistantMessage);
+
+                if (!toolCalls.length && !roundContent && !roundReasoning) {
+                    this.uiRenderer.appendBlock({ type: 'content', markdown: '_Mutsumi Debug: No content, reasoning, or tool calls received from API._' });
+                    this.uiRenderer.appendUsage(toBlockUsage(assistantMessage.usage, assistantMessage.mutsumi));
+                    break;
+                }
+
+                if (toolCalls.length === 0) {
+                    this.uiRenderer.commitRoundUI(roundContentBlocks, roundReasoning, toBlockUsage(assistantMessage.usage, assistantMessage.mutsumi));
+                    break;
+                }
+
+                this.uiRenderer.commitRoundUI(roundContentBlocks, roundReasoning, toBlockUsage(assistantMessage.usage, assistantMessage.mutsumi));
+                // Publish the round's finished content and usage now, before any tool runs. Tools can
+                // take seconds (or wait on approval); without this flush the usage footer would not
+                // appear until the first tool result pushed an unrelated frame. Pending tool calls
+                // stay visible in the active area until their finished blocks replace them.
+                await this.publishFrame(this.uiRenderer.getRenderData());
+
+                let result: ToolExecutionResult;
+                try {
+                    result = await this.toolExecutor.executeTools(
+                        toolCalls,
+                        abortController.signal,
+                        {
+                            appendOutput: async (block: RenderBlock) => {
+                                this.uiRenderer.appendBlock(block);
+                                // getRenderData (not committed-only): tool calls still queued behind this
+                                // one must keep showing their running placeholders.
+                                await this.publishFrame(this.uiRenderer.getRenderData());
+                            },
+                            signalTermination: () => {
+                                // Termination handled via return values
+                            }
+                        }
+                    );
+                } catch (error: any) {
+                    // An incomplete tool round cannot be replayed safely.
+                    messages.splice(roundMessageStart);
+                    newMessages.splice(newRoundStart);
+                    if (abortController.signal.aborted || this.session.token.isCancellationRequested
+                        || error?.name === 'AbortError' || error?.name === 'APIUserAbortError') {
+                        status = 'cancelled';
+                    } else {
+                        status = 'failed';
+                        failure = {
+                            code: typeof error?.code === 'string' && error.code ? error.code : 'TOOL_EXECUTION_ERROR',
+                            message: error?.message || String(error),
+                        };
+                        console.error('Tool execution infrastructure error:', error);
+                    }
+                    break;
+                }
+                const toolMessages = result.messages;
+                messages.push(...toolMessages);
+                newMessages.push(...toolMessages);
+
+                if (abortController.signal.aborted || this.session.token.isCancellationRequested) {
+                    // A cancelled tool round is not a replayable conversation turn.
+                    messages.splice(roundMessageStart);
+                    newMessages.splice(newRoundStart);
                     status = 'cancelled';
                     break;
                 }
 
-                // Network/API error - show notification and preserve history
-                const errorMessage = error.message || String(error);
-                status = 'failed';
-                failure = {
-                    code: typeof error.code === 'string' && error.code ? error.code : 'LLM_STREAM_ERROR',
-                    message: errorMessage,
-                };
-                console.error('LLM Stream Error:', error);
-                
-                // Show error as VSCode notification (non-modal)
-                const copyDetailsBtn = t('controller.copyDetails');
-                vscode.window.showErrorMessage(
-                    t('agentRunner.llmError', errorMessage),
-                    copyDetailsBtn
-                ).then(selection => {
-                    if (selection === copyDetailsBtn) {
-                        vscode.env.clipboard.writeText(error.stack || errorMessage);
-                    }
-                });
-
-                const errorMarkdown = `\n\n> ⚠️ **Error**: ${errorMessage.replace(/\n/g, ' ')}\n\n*Execution stopped due to network error. Previous output is preserved above.*`;
-                this.uiRenderer.appendBlock({ type: 'content', markdown: errorMarkdown });
-                try {
-                    await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
-                } catch (renderError) {
-                    console.error('Failed to render LLM error state:', renderError);
+                // Handle task completion (e.g., from task_finish tool)
+                if (result.isTaskComplete) {
+                    await this.markSessionAsFinished();
+                    break;
                 }
 
-                break;
-            }
-
-            const thinkingBlocks = assistantMessage.content.filter(block => block.type === 'thinking');
-            const toolCalls = assistantMessage.content.filter((block): block is ToolCall => block.type === 'toolCall');
-            const roundContentBlocks = assistantTextBlocks(assistantMessage);
-            const roundContent = roundContentBlocks.join('');
-            const roundReasoning = thinkingBlocks.map(block => block.thinking).join('');
-
-            const roundMessageStart = messages.length;
-            const newRoundStart = newMessages.length;
-            messages.push(assistantMessage);
-            newMessages.push(assistantMessage);
-
-            if (!toolCalls.length && !roundContent && !roundReasoning) {
-                this.uiRenderer.appendBlock({ type: 'content', markdown: '_Mutsumi Debug: No content, reasoning, or tool calls received from API._' });
-                this.uiRenderer.appendUsage(toBlockUsage(assistantMessage.usage));
-                await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
-                break;
-            }
-
-            if (toolCalls.length === 0) {
-                this.uiRenderer.commitRoundUI(roundContentBlocks, roundReasoning, toBlockUsage(assistantMessage.usage));
-                await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
-                break;
-            }
-
-            this.uiRenderer.commitRoundUI(roundContentBlocks, roundReasoning, toBlockUsage(assistantMessage.usage));
-
-            let result: ToolExecutionResult;
-            try {
-                result = await this.toolExecutor.executeTools(
-                    toolCalls,
-                    abortController.signal,
-                    {
-                        appendOutput: async (block: RenderBlock) => {
-                            this.uiRenderer.appendBlock(block);
-                            await this.session.replaceOutput(JSON.stringify(this.uiRenderer.getCommittedRenderData()), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
-                        },
-                        signalTermination: () => {
-                            // Termination handled via return values
-                        }
-                    }
-                );
-            } catch (error: any) {
-                // An incomplete tool round cannot be replayed safely.
-                messages.splice(roundMessageStart);
-                newMessages.splice(newRoundStart);
-                if (abortController.signal.aborted || this.session.token.isCancellationRequested
-                    || error?.name === 'AbortError' || error?.name === 'APIUserAbortError') {
-                    status = 'cancelled';
-                } else {
+                // Handle other termination cases (e.g., edit rejection)
+                if (result.shouldTerminate) {
                     status = 'failed';
                     failure = {
-                        code: typeof error?.code === 'string' && error.code ? error.code : 'TOOL_EXECUTION_ERROR',
-                        message: error?.message || String(error),
+                        code: 'TOOL_TERMINATED',
+                        message: 'A tool terminated the agent run before task completion',
                     };
-                    console.error('Tool execution infrastructure error:', error);
+                    break;
                 }
-                break;
-            }
-            const toolMessages = result.messages;
-            messages.push(...toolMessages);
-            newMessages.push(...toolMessages);
 
-            if (abortController.signal.aborted || this.session.token.isCancellationRequested) {
-                // A cancelled tool round is not a replayable conversation turn.
-                messages.splice(roundMessageStart);
-                newMessages.splice(newRoundStart);
-                status = 'cancelled';
-                break;
+                if (loopCount >= this.maxLoops) {
+                    status = 'failed';
+                    failure = {
+                        code: 'MAX_LOOPS_EXCEEDED',
+                        message: `Agent reached the maximum of ${this.maxLoops} tool interaction loops`,
+                    };
+                    break;
+                }
             }
-
-            // Handle task completion (e.g., from task_finish tool)
-            if (result.isTaskComplete) {
-                await this.markSessionAsFinished();
-                break;
-            }
-
-            // Handle other termination cases (e.g., edit rejection)
-            if (result.shouldTerminate) {
-                status = 'failed';
-                failure = {
-                    code: 'TOOL_TERMINATED',
-                    message: 'A tool terminated the agent run before task completion',
-                };
-                break;
-            }
-
-            if (loopCount >= this.maxLoops) {
-                status = 'failed';
-                failure = {
-                    code: 'MAX_LOOPS_EXCEEDED',
-                    message: `Agent reached the maximum of ${this.maxLoops} tool interaction loops`,
-                };
-                break;
-            }
+        } finally {
+            // Single terminal publication point for every exit path (completion, cancellation,
+            // failure). endRun() retracts tool placeholders whose tool never ran while keeping
+            // the partial answer.
+            await this.publishFrame(this.uiRenderer.endRun());
         }
 
         // Generate title after first user message (only once)
@@ -294,6 +320,29 @@ export class AgentRunner {
             status,
             ...(failure ? { error: failure } : {}),
         };
+    }
+
+    /**
+     * Publishes one render frame, treating display failures as non-fatal.
+     * @description `run()` returns the data contract (native messages + status); `replaceOutput`
+     * is the presentation contract. A failed frame must never reject the run — both callers skip
+     * `setHistory` + `save` when `run()` rejects, which would drop an already-completed round for
+     * a display-only failure — and a streaming frame's failure must not be classified as an
+     * LLM/cancellation error by the stream handler. Failures are expected once the cell execution
+     * has been disposed (cancellation); the first one is logged, later ones are suppressed because
+     * streaming frames can fail once per token.
+     * @private
+     * @param {RenderData} data - The frame to publish
+     */
+    private async publishFrame(data: RenderData): Promise<void> {
+        try {
+            await this.session.replaceOutput(JSON.stringify(data), { mimeType: MUTSUMI_AGENT_CHAT_MIME });
+        } catch (error) {
+            if (!this.publishFailureLogged) {
+                this.publishFailureLogged = true;
+                console.error('Failed to publish render frame:', error);
+            }
+        }
     }
 
     /**

@@ -6,7 +6,7 @@
  */
 
 import { RENDERER_CSS } from './css';
-import { formatTokens } from './formatTokens';
+import { formatDuration, formatPercent, formatThroughput, formatTokens } from './formatTokens';
 // Type-only import: erased at build time, so the renderer bundle pulls in no
 // extension runtime code while sharing the exact IR declared by the producer.
 import type { BlockUsage, RenderBlock, RenderData } from './renderTypes';
@@ -146,13 +146,39 @@ function usageFooter(usage: BlockUsage): HTMLElement {
   const footer = document.createElement('div');
   footer.className = 'mutsumi-usage-footer';
   const parts = [`in ${formatTokens(usage.input)}`, `out ${formatTokens(usage.output)}`];
-  if (usage.cacheRead > 0) parts.push(`cache ${formatTokens(usage.cacheRead)}`);
+  // Spelled-out copy for the hover tooltip, so the compact line stays readable in a narrow cell.
+  const details = [`Input (uncached): ${usage.input} tokens`, `Output: ${usage.output} tokens`];
+  // Cache hit rate: pi-ai's `input` excludes cache traffic (Anthropic/OpenAI mappings agree),
+  // so the full prompt is input + cacheRead + cacheWrite and cacheRead is the hit part.
+  if (usage.cacheRead > 0) {
+    const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+    const hit = promptTokens > 0 ? formatPercent(usage.cacheRead / promptTokens) : undefined;
+    parts.push(`cache ${formatTokens(usage.cacheRead)}${hit ? ` (${hit})` : ''}`);
+    if (hit) details.push(`Cache hit: ${hit} of ${promptTokens} prompt tokens`);
+  }
   // totalTokens is finalized upstream by toBlockUsage (SDK formula), never recomputed here.
-  parts.push(`${formatTokens(usage.totalTokens)} tok`);
+  // Occupancy is post-round (prompt + output), so it can legitimately exceed 100%.
+  if (usage.contextWindow) {
+    parts.push(`ctx ${formatTokens(usage.totalTokens)}/${formatTokens(usage.contextWindow)} (${formatPercent(usage.totalTokens / usage.contextWindow)})`);
+    details.push(`Context after this round: ${usage.totalTokens} of ${usage.contextWindow} tokens`);
+  } else {
+    parts.push(`${formatTokens(usage.totalTokens)} tok`);
+  }
+  // generationMs/ttftMs are already > 0 or absent (toBlockUsage drops junk); output gates tok/s.
+  if (usage.generationMs && usage.output > 0) {
+    const rate = formatThroughput(usage.output / (usage.generationMs / 1000));
+    parts.push(`${rate} tok/s`);
+    details.push(`Throughput: ${rate} tok/s over ${formatDuration(usage.generationMs)}`);
+  }
+  if (usage.ttftMs) {
+    parts.push(`ttft ${formatDuration(usage.ttftMs)}`);
+    details.push(`Time to first token: ${formatDuration(usage.ttftMs)}`);
+  }
   // 4dp gives $0.0001 resolution (0.01 cent); anything smaller would render as a
   // misleading "$0.0000", so it is hidden. toBlockUsage already drops cost-only junk.
   if (usage.costTotal >= 0.00005) parts.push(`$${usage.costTotal.toFixed(4)}`);
   footer.textContent = parts.join(' · ');
+  footer.title = details.join('\n');
   return footer;
 }
 

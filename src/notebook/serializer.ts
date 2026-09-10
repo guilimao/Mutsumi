@@ -260,6 +260,7 @@ export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isS
                     toolCallBlocks.push({
                         type: 'toolCall',
                         name: part.name,
+                        toolCallId: part.id,
                         args: part.arguments,
                         summary,
                         result: result ? serializeContentToString(result.content) : undefined,
@@ -269,7 +270,9 @@ export function buildInteractionRenderBlocks(group: PersistedAgentMessage[], isS
                 }
             }
             // The persisted shape keeps usage loose; hydration validates it before any send.
-            const usage = toBlockUsage(m.usage as Usage | undefined);
+            // Mutsumi-only round measurements ride along so a reopened file shows the same
+            // context/timing detail the live footer did.
+            const usage = toBlockUsage(m.usage as Usage | undefined, m.mutsumi);
             if (usage) blocks.push({ type: 'usage', usage });
             blocks.push(...toolCallBlocks);
         }

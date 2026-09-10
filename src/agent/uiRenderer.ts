@@ -74,12 +74,20 @@ export class UIRenderer {
     }
 
     /**
-     * L1 lock: commits all remaining active content at round end.
-     * @description Called after the stream completes (before tool execution).
-     * Commits anything still active; the block/reasoning arguments serve as a
-     * fallback for sections that never passed through updateActive. Per-round
-     * state is then reset for the next round. When usage is provided it is appended
-     * as a dedicated usage block (see {@link appendUsage}).
+     * L1 lock: commits all remaining active content at the end of a round.
+     * @description Called once a stream settles. On success that is right after the stream and
+     * before tool execution; on failure the runner calls {@link commitPartialOutput} to lock the
+     * partial output the failed stream already showed, so the error block is appended below it.
+     * The block/reasoning arguments are authoritative when non-empty and act as a fallback for
+     * sections that never passed through updateActive; passing them empty therefore commits
+     * exactly what is currently tracked. Per-round content state is then reset for the next
+     * round. When usage is provided it is appended as a dedicated usage block (see
+     * {@link appendUsage}).
+     *
+     * Pending tool placeholders are deliberately left in the active area: the round's
+     * own tool calls are still executing, and their placeholders are only replaced as
+     * each finished block is committed (see {@link appendBlock}). Clearing them here
+     * would blank the running tool calls between the round commit and the first result.
      * @param {string[]} contentBlocks - Final text blocks of the round, in order
      * @param {string} reasoning - Final accumulated reasoning of the round
      * @param {BlockUsage} [usage] - Token/cost of the assistant message that produced this round
@@ -106,7 +114,18 @@ export class UIRenderer {
         this.activeReasoning = '';
         this.contentBlocks = [];
         this.committedContentCount = 0;
-        this.activeTools = [];
+        // activeTools is intentionally preserved; see this method's contract above.
+    }
+
+    /**
+     * Commits the output a stream already showed, for a round that will not complete.
+     * @description Used by the failure path before appending the error block, so the partial
+     * answer stays above the error. Delegates to {@link commitRoundUI} with empty arguments,
+     * which commits exactly what is currently tracked and appends no usage; named separately so
+     * the caller's intent is legible without reading commitRoundUI's argument contract.
+     */
+    commitPartialOutput(): void {
+        this.commitRoundUI([], '');
     }
 
     /**
@@ -135,10 +154,53 @@ export class UIRenderer {
 
     /**
      * L3 lock: appends a completed block (e.g. a finished tool call) to committed.
+     * @description A finished tool call resolves its streaming placeholder via
+     * {@link resolvePendingTool}.
      * @param {RenderBlock} block - The block to commit
      */
     appendBlock(block: RenderBlock): void {
         this.committedBlocks.push(block);
+        if (block.type === 'toolCall') this.resolvePendingTool(block);
+    }
+
+    /**
+     * Drops the placeholder a finished tool call supersedes.
+     * @description Placeholders are display-only, so a wrong guess costs less than a phantom
+     * "running" block: match by tool-call ID, then by name, then take the leading placeholder.
+     * The name/head fallbacks also cover placeholders or results that carry no ID (older
+     * callers, and the `toolCallId` field is optional on both sides).
+     * @param {Extract<RenderBlock, { type: 'toolCall' }>} block - The finished tool call
+     */
+    private resolvePendingTool(block: Extract<RenderBlock, { type: 'toolCall' }>): void {
+        const placeholders = this.activeTools;
+        if (placeholders.length === 0) return;
+        const isToolCall = (candidate: RenderBlock): candidate is Extract<RenderBlock, { type: 'toolCall' }> =>
+            candidate.type === 'toolCall';
+        let index = -1;
+        if (block.toolCallId !== undefined) {
+            index = placeholders.findIndex(candidate => isToolCall(candidate) && candidate.toolCallId === block.toolCallId);
+        }
+        if (index < 0) {
+            index = placeholders.findIndex(candidate => isToolCall(candidate) && candidate.name === block.name);
+        }
+        if (index < 0) index = placeholders.findIndex(isToolCall);
+        if (index >= 0) placeholders.splice(index, 1);
+    }
+
+    /**
+     * Finalizes the run and produces the terminal frame.
+     * @description The single terminal point for the runner. It drops tool placeholders that
+     * can never complete — a kept one would render as a tool call that runs forever — and
+     * leaves any still-active content/reasoning in place: a stream cancelled mid-flight has
+     * only reached the active area, and that partial answer is still what the user saw. A
+     * failed stream is different: the runner already locked its partial output into committed
+     * via {@link commitPartialOutput} before appending the error block, so active holds
+     * nothing but placeholders by the time this runs. Never touches the committed blocks.
+     * @returns {RenderData} The frame to publish as the run's last word
+     */
+    endRun(): RenderData {
+        this.activeTools = [];
+        return this.getRenderData();
     }
 
     /**
@@ -151,6 +213,7 @@ export class UIRenderer {
      * @param {boolean} isStreaming - Whether this is a pending/streaming tool call
      * @param {string} [toolResult] - Execution result (for finished calls)
      * @param {Object} [renderingConfig] - Code-block rendering hints for the renderer
+     * @param {string} [toolCallId] - Provider tool-call ID (placeholder/result pairing)
      * @returns {RenderBlock} The tool call render block
      */
     formatToolCall(
@@ -159,12 +222,14 @@ export class UIRenderer {
         prettyPrintSummary: string,
         isStreaming: boolean,
         toolResult?: string,
-        renderingConfig?: { argsToCodeBlock?: string[]; codeBlockFilePaths?: (string | undefined)[] }
+        renderingConfig?: { argsToCodeBlock?: string[]; codeBlockFilePaths?: (string | undefined)[] },
+        toolCallId?: string
     ): RenderBlock {
         const safeArgs = (typeof toolArgs === 'object' && toolArgs !== null) ? toolArgs : {};
         return {
             type: 'toolCall',
             name,
+            ...(toolCallId ? { toolCallId } : {}),
             args: safeArgs,
             summary: prettyPrintSummary,
             result: toolResult,
@@ -197,7 +262,7 @@ export class UIRenderer {
             const args = ptc.arguments ?? {};
             const summary = toolSet.getPrettyPrint(toolName, args);
             const config = toolSet.getRenderingConfig(toolName);
-            blocks.push(this.formatToolCall(toolName, args, summary, true, undefined, config));
+            blocks.push(this.formatToolCall(toolName, args, summary, true, undefined, config, ptc.id));
         }
         return blocks;
     }
@@ -220,19 +285,6 @@ export class UIRenderer {
                 content: activeContent,
                 pendingTools: [...this.activeTools]
             } : null
-        };
-    }
-
-    /**
-     * Gets render data containing only committed blocks.
-     * @description Used after tool execution or stream errors, when no streaming
-     * area should be displayed.
-     * @returns {RenderData} Committed-only render data (active: null)
-     */
-    getCommittedRenderData(): RenderData {
-        return {
-            committed: [...this.committedBlocks],
-            active: null
         };
     }
 }

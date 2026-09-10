@@ -75,14 +75,21 @@ function userMessage(value: unknown): value is PersistedAgentMessage & { role: '
     return true;
 }
 
+/**
+ * Validates a message's structural core. `usage` and `mutsumi` are deliberately left opaque:
+ * they are envelope/display data whose validity is decided at its point of use —
+ * `hydrateProviderMessage` sanitizes `usage` for provider calls, `toPiContext` strips the
+ * Mutsumi extension, and `toBlockUsage` sanitizes the measurements for the footer. A malformed
+ * display value must never make the whole session unopenable, and validating it here would not
+ * add safety anyway.
+ */
 function assistantMessage(value: unknown): value is PersistedAgentMessage & { role: 'assistant' } {
     if (!record(value)) return false;
     return Array.isArray(value.content)
         && value.content.every(block => textContent(block) || thinkingContent(block) || toolCall(block))
         && typeof value.api === 'string'
         && typeof value.provider === 'string'
-        && typeof value.model === 'string'
-        && value.mutsumi === undefined;
+        && typeof value.model === 'string';
 }
 
 function toolResultMessage(value: unknown): value is PersistedAgentMessage & { role: 'toolResult' } {

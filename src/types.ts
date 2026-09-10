@@ -98,12 +98,28 @@ export interface MutsumiUserMessageState {
 }
 
 /**
+ * Mutsumi-only measurements attached to a persisted assistant message.
+ * @description None of this is provider data: `contextWindow` is the catalog value the round
+ * ran against, and the two durations are wall-clock measurements taken by the stream handler.
+ * Kept out of `Usage` so the provider contract stays opaque, and stripped before any request
+ * (see `toPiContext`) exactly like {@link MutsumiUserMessageState}.
+ */
+export interface MutsumiAssistantMessageState {
+    /** Context window of the model that produced the round, when the catalog reports one. */
+    contextWindow?: number;
+    /** Wall-clock ms from request dispatch to the first streamed token. */
+    ttftMs?: number;
+    /** Wall-clock ms spent streaming output after the first token. */
+    generationMs?: number;
+}
+
+/**
  * Message in an agent conversation.
  * @interface AgentMessage
  */
 export type AgentMessage =
     | (UserMessage & { mutsumi?: MutsumiUserMessageState })
-    | AssistantMessage
+    | (AssistantMessage & { mutsumi?: MutsumiAssistantMessageState })
     | ToolResultMessage;
 
 export type PersistedTextContent = {
@@ -158,6 +174,8 @@ export type PersistedAssistantMessage = {
     responseModel?: unknown;
     errorMessage?: unknown;
     diagnostics?: unknown;
+    /** Mutsumi-only round measurements; see {@link MutsumiAssistantMessageState}. */
+    mutsumi?: MutsumiAssistantMessageState;
 };
 
 export type PersistedToolResultMessage = {

@@ -9,6 +9,7 @@ import type { Usage } from '@earendil-works/pi-ai';
 // pi-ai's own token accounting: `totalTokens || input + output + cacheRead + cacheWrite`.
 // Reused so the local fallback cannot drift from the SDK's definition of a total.
 import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate';
+import type { MutsumiAssistantMessageState } from '../types';
 
 /**
  * Custom MIME type for agent chat render data.
@@ -31,6 +32,15 @@ export interface BlockUsage {
     cacheWrite: number;
     totalTokens: number;
     costTotal: number;
+    /**
+     * Context window the round ran against. Serialized per round because the model that served
+     * it is not necessarily the session's current one, and the renderer has no provider access.
+     */
+    contextWindow?: number;
+    /** Wall-clock ms to the first streamed token; absent when the stream produced no token. */
+    ttftMs?: number;
+    /** Wall-clock ms of the generation phase after the first token. */
+    generationMs?: number;
 }
 
 /**
@@ -42,8 +52,11 @@ export interface BlockUsage {
  * (`calculateContextTokens`), so cached input is not silently dropped. The emptiness gate
  * counts token fields only — pi-ai derives cost from tokens, so a cost-only usage is junk
  * rather than a billable round and must not render an empty "$0.0000" badge.
+ *
+ * `state` (the persisted `mutsumi` measurements) is opaque on disk and sanitized here; see
+ * the `positive` note below. This is the only place measurement validity is defined.
  */
-export function toBlockUsage(usage: Usage | undefined): BlockUsage | undefined {
+export function toBlockUsage(usage: Usage | undefined, state?: MutsumiAssistantMessageState): BlockUsage | undefined {
     if (!usage || typeof usage !== 'object') return undefined;
     const num = (value: unknown): number =>
         typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
@@ -63,7 +76,20 @@ export function toBlockUsage(usage: Usage | undefined): BlockUsage | undefined {
     });
     const costTotal = num(usage.cost?.total);
     if (input + output + cacheRead + cacheWrite + totalTokens === 0) return undefined;
-    return { input, output, cacheRead, cacheWrite, totalTokens, costTotal };
+    // The persisted `mutsumi` shape is opaque (like `usage`), so this is the single place that
+    // decides what counts as a usable measurement: a positive finite number, else dropped. Junk
+    // is dropped rather than zeroed so the renderer never shows a misleading "0ms"/"0 tok/s".
+    const positive = (value: unknown): number | undefined =>
+        typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+    const contextWindow = positive(state?.contextWindow);
+    const ttftMs = positive(state?.ttftMs);
+    const generationMs = positive(state?.generationMs);
+    return {
+        input, output, cacheRead, cacheWrite, totalTokens, costTotal,
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(ttftMs !== undefined ? { ttftMs } : {}),
+        ...(generationMs !== undefined ? { generationMs } : {}),
+    };
 }
 
 /**
@@ -85,6 +111,11 @@ export type RenderBlock =
         type: 'toolCall';
         /** Tool name (e.g. 'read') */
         name: string;
+        /**
+         * Provider tool-call ID, when known. Lets a finished block resolve the exact streaming
+         * placeholder it belongs to, rather than assuming placeholder and result order match.
+         */
+        toolCallId?: string;
         /** Tool arguments (complete or best-effort partial while streaming) */
         args: Record<string, any>;
         /** Human-readable summary of the tool call */

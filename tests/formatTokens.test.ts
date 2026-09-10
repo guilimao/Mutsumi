@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatTokens } from '../src/notebook/formatTokens';
+import { formatDuration, formatPercent, formatThroughput, formatTokens } from '../src/notebook/formatTokens';
 
 describe('formatTokens', () => {
     it('renders raw counts below 1000', () => {
@@ -35,5 +35,62 @@ describe('formatTokens', () => {
         expect(formatTokens(Number.NaN)).toBe('0');
         expect(formatTokens(Number.POSITIVE_INFINITY)).toBe('0');
         expect(formatTokens(-5)).toBe('0');
+    });
+});
+
+describe('formatPercent', () => {
+    it('floors a tiny nonzero share below 1%', () => {
+        expect(formatPercent(0.0001)).toBe('<1%');
+        expect(formatPercent(0.0099)).toBe('<1%');
+        expect(formatPercent(0.01)).toBe('1%');
+    });
+
+    it('rounds to whole percent and keeps overflow readable', () => {
+        expect(formatPercent(0.755)).toBe('76%');
+        expect(formatPercent(1.2)).toBe('120%');
+    });
+
+    it('renders zero, negative and non-finite as 0%', () => {
+        expect(formatPercent(0)).toBe('0%');
+        expect(formatPercent(-0.5)).toBe('0%');
+        expect(formatPercent(Number.NaN)).toBe('0%');
+    });
+});
+
+describe('formatDuration', () => {
+    it('uses ms below one second and seconds above', () => {
+        expect(formatDuration(0)).toBe('0ms');
+        expect(formatDuration(820)).toBe('820ms');
+        expect(formatDuration(1000)).toBe('1.0s');
+        expect(formatDuration(1400)).toBe('1.4s');
+    });
+
+    it('rounds before choosing the unit so 999.5ms never renders as 1000ms', () => {
+        expect(formatDuration(999.5)).toBe('1.0s');
+        expect(formatDuration(999.4)).toBe('999ms');
+    });
+
+    it('renders negative and non-finite as 0ms', () => {
+        expect(formatDuration(-1)).toBe('0ms');
+        expect(formatDuration(Number.NaN)).toBe('0ms');
+    });
+});
+
+describe('formatThroughput', () => {
+    it('uses one decimal below 10 tok/s and integers above', () => {
+        expect(formatThroughput(4.25)).toBe('4.3');
+        expect(formatThroughput(9.9)).toBe('9.9');
+        expect(formatThroughput(12.5)).toBe('13');
+    });
+
+    it('rounds before choosing the form so 9.95 never renders as 10.0', () => {
+        expect(formatThroughput(9.95)).toBe('10');
+        expect(formatThroughput(9.94)).toBe('9.9');
+    });
+
+    it('renders zero, negative and non-finite as 0', () => {
+        expect(formatThroughput(0)).toBe('0');
+        expect(formatThroughput(-3)).toBe('0');
+        expect(formatThroughput(Number.NaN)).toBe('0');
     });
 });

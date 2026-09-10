@@ -175,6 +175,7 @@ export class ToolExecutor {
 					false,
 					toolResult,
 					config,
+					tc.id,
 				),
 			);
 

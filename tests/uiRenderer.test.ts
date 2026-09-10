@@ -29,7 +29,7 @@ describe('UIRenderer usage blocks', () => {
         const renderer = new UIRenderer();
         renderer.updateActive(['all done'], '', []);
         renderer.commitRoundUI(['all done'], '', usage);
-        const data = renderer.getCommittedRenderData();
+        const data = renderer.getRenderData();
         expect(data.committed).toEqual([
             expect.objectContaining({ type: 'content', markdown: 'all done' }),
             { type: 'usage', usage },
@@ -42,7 +42,7 @@ describe('UIRenderer usage blocks', () => {
         renderer.commitRoundUI([], '', usage);
         renderer.appendBlock(toolBlock('read'));
         renderer.appendBlock(toolBlock('write'));
-        const data = renderer.getCommittedRenderData();
+        const data = renderer.getRenderData();
         // The usage belongs to the assistant message that issued the calls; the round's tool
         // blocks are appended later, during tool execution.
         expect(data.committed.map(block => block.type)).toEqual(['usage', 'toolCall', 'toolCall']);
@@ -53,7 +53,7 @@ describe('UIRenderer usage blocks', () => {
         renderer.commitRoundUI([], '', usage);
         renderer.commitRoundUI(['second'], '', undefined);
         renderer.appendBlock(toolBlock('read'));
-        const data = renderer.getCommittedRenderData();
+        const data = renderer.getRenderData();
         expect(data.committed.map(block => block.type)).toEqual(['usage', 'content', 'toolCall']);
     });
 
@@ -61,14 +61,86 @@ describe('UIRenderer usage blocks', () => {
         const renderer = new UIRenderer();
         renderer.updateActive([], 'ponder', []);
         renderer.commitRoundUI([], 'ponder', usage);
-        expect(renderer.getCommittedRenderData().committed.map(block => block.type)).toEqual(['reasoning', 'usage']);
+        expect(renderer.getRenderData().committed.map(block => block.type)).toEqual(['reasoning', 'usage']);
     });
 
     it('appendUsage emits the block without requiring round content', () => {
         const renderer = new UIRenderer();
         renderer.appendUsage(undefined);
         renderer.appendUsage(usage);
-        expect(renderer.getCommittedRenderData().committed).toEqual([{ type: 'usage', usage }]);
+        expect(renderer.getRenderData().committed).toEqual([{ type: 'usage', usage }]);
+    });
+
+    it('keeps pending placeholders across the round commit and resolves ID-less blocks by position (legacy fallback)', () => {
+        const renderer = new UIRenderer();
+        const pending = (name: string): RenderBlock => (
+            { type: 'toolCall', name, args: {}, summary: name, isStreaming: true }
+        );
+        renderer.updateActive([], '', [pending('read'), pending('write')]);
+        renderer.commitRoundUI([], '', usage);
+
+        // The round is committed (usage lands) but its tool calls have not run yet, so their
+        // running placeholders must stay in the active area instead of blinking out.
+        const committedFrame = renderer.getRenderData();
+        expect(committedFrame.committed).toEqual([{ type: 'usage', usage }]);
+        expect(committedFrame.active?.pendingTools.map(block => block.type === 'toolCall' && block.name))
+            .toEqual(['read', 'write']);
+
+        renderer.appendBlock({ type: 'toolCall', name: 'read', args: {}, summary: 'read', isStreaming: false, result: 'ok' });
+        const afterFirst = renderer.getRenderData();
+        expect(afterFirst.committed.map(block => block.type)).toEqual(['usage', 'toolCall']);
+        expect(afterFirst.active?.pendingTools.map(block => block.type === 'toolCall' && block.name))
+            .toEqual(['write']);
+
+        renderer.appendBlock({ type: 'toolCall', name: 'write', args: {}, summary: 'write', isStreaming: false, result: 'ok' });
+        const afterAll = renderer.getRenderData();
+        expect(afterAll.committed.map(block => block.type)).toEqual(['usage', 'toolCall', 'toolCall']);
+        expect(afterAll.active).toBeNull();
+    });
+
+    it('resolves placeholders by tool-call ID, not by completion order', () => {
+        const renderer = new UIRenderer();
+        const pending = (id: string, name: string): RenderBlock => (
+            { type: 'toolCall', name, toolCallId: id, args: {}, summary: name, isStreaming: true }
+        );
+        renderer.updateActive([], '', [pending('a', 'read'), pending('b', 'write')]);
+        renderer.commitRoundUI([], '', usage);
+
+        // The result of the second call arrives first; identity must win over position.
+        renderer.appendBlock({ type: 'toolCall', name: 'write', toolCallId: 'b', args: {}, summary: 'write', isStreaming: false, result: 'ok' });
+        expect(renderer.getRenderData().active?.pendingTools.map(block => block.type === 'toolCall' && block.name))
+            .toEqual(['read']);
+
+        renderer.appendBlock({ type: 'toolCall', name: 'read', toolCallId: 'a', args: {}, summary: 'read', isStreaming: false, result: 'ok' });
+        expect(renderer.getRenderData().active).toBeNull();
+        expect(renderer.getRenderData().committed.map(block => block.type))
+            .toEqual(['usage', 'toolCall', 'toolCall']);
+    });
+
+    it('falls back to the tool name when placeholder and result do not share an ID', () => {
+        const renderer = new UIRenderer();
+        // Placeholder without an ID (older caller); the finished block carries the provider ID.
+        renderer.updateActive([], '', [
+            { type: 'toolCall', name: 'read', args: {}, summary: 'read', isStreaming: true },
+        ]);
+        renderer.commitRoundUI([], '', usage);
+
+        renderer.appendBlock({ type: 'toolCall', name: 'read', toolCallId: 'a', args: {}, summary: 'read', isStreaming: false, result: 'ok' });
+        expect(renderer.getRenderData().active).toBeNull();
+    });
+
+    it('produces the terminal frame: unresolved placeholders drop, partial output stays', () => {
+        const renderer = new UIRenderer();
+        renderer.updateActive(['partial answer'], '', [
+            { type: 'toolCall', name: 'write', toolCallId: 'a', args: {}, summary: 'write', isStreaming: true },
+        ]);
+
+        // Run ended before the tool could finish: the placeholder cannot stay, the streamed
+        // text can, and committed blocks are untouched.
+        const terminal = renderer.endRun();
+        expect(terminal.active?.pendingTools).toEqual([]);
+        expect(terminal.active?.content).toBe('partial answer');
+        expect(terminal.committed).toEqual([]);
     });
 });
 
@@ -85,7 +157,7 @@ describe('UIRenderer content block tracking', () => {
 
         renderer.commitRoundUI(['A', 'B'], '', usage);
         for (const name of ['read']) renderer.appendBlock(toolBlock(name));
-        expect(renderer.getCommittedRenderData().committed.map(block => block.type))
+        expect(renderer.getRenderData().committed.map(block => block.type))
             .toEqual(['content', 'content', 'usage', 'toolCall']);
     });
 
@@ -98,7 +170,7 @@ describe('UIRenderer content block tracking', () => {
         expect(frame.active).toMatchObject({ reasoning: 'ponder', content: '' });
 
         renderer.updateActive(['first words'], 'ponder', []);
-        expect(renderer.getCommittedRenderData().committed.map(block => block.type))
+        expect(renderer.getRenderData().committed.map(block => block.type))
             .toEqual(['reasoning']);
     });
 
@@ -107,7 +179,7 @@ describe('UIRenderer content block tracking', () => {
         renderer.updateActive(['growing'], '', [toolBlock('read')]);
         renderer.updateActive(['growing more'], '', [toolBlock('read')]);
         renderer.commitRoundUI(['growing more'], '', undefined);
-        const committed = renderer.getCommittedRenderData().committed;
+        const committed = renderer.getRenderData().committed;
         expect(committed).toEqual([{ type: 'content', markdown: 'growing more' }]);
     });
 
@@ -117,7 +189,7 @@ describe('UIRenderer content block tracking', () => {
         renderer.commitRoundUI(['round one'], '', undefined);
         renderer.updateActive(['round two'], '', []);
         renderer.commitRoundUI(['round two'], '', undefined);
-        expect(renderer.getCommittedRenderData().committed).toEqual([
+        expect(renderer.getRenderData().committed).toEqual([
             { type: 'content', markdown: 'round one' },
             { type: 'content', markdown: 'round two' },
         ]);

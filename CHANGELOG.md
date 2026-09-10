@@ -17,6 +17,13 @@ All notable user-visible changes are recorded here. The format follows
   round's content/reasoning and before its tool calls — content rounds, tool rounds, and
   reasoning-only rounds alike. The same order is rebuilt when reopening a `.mtm` file, so
   the line no longer jumps around between live output and reload.
+- The usage line now also reports the model's context window and the round's occupancy with a
+  percentage (`ctx 6.5K/200K (3%)`), the cache hit rate, the average generation throughput
+  (`tok/s`), and the time to first token. Context window and occupancy, cache hit rate, and
+  cost come from pi-ai's own `Usage`/model catalog; TTFT and generation throughput are measured
+  by the stream handler and persisted on the assistant message (a `mutsumi` extension that is
+  tolerated like other envelope fields, sanitized at render time, and stripped before every
+  provider request), so they survive a `.mtm` reload.
 
 ### Changed — review before upgrading
 
@@ -50,6 +57,19 @@ All notable user-visible changes are recorded here. The format follows
 
 ### Fixed
 
+- A tool round's usage line (and the round's committed content) now appears as soon as the
+  model stops, instead of waiting for the first tool result. The round was committed with
+  `commitRoundUI` but its frame was only published by the next tool output, so a slow tool (or
+  an approval wait) delayed the usage footer by seconds. The running tool-call placeholders are
+  now kept in the live area and replaced as each tool finishes (matched by tool-call ID, with
+  name and order as fallbacks), so publishing the commit immediately no longer makes them blink
+  out. Every run now ends on exactly one terminal frame produced by `UIRenderer.endRun()` on all
+  exit paths — completion, cancellation, and failure: it retracts any placeholder whose tool
+  never ran, keeps the partial answer (during the live run, a failed stream's partial text is
+  now kept above the error message instead of being discarded), and never touches committed
+  blocks. Frame publication is best-effort throughout: a display failure (e.g. the cell execution
+  was already disposed) is logged and never changes the run's outcome, so a completed round is
+  still returned for persistence instead of being lost to a rejected run.
 - A discovered catalog is now stored together with the fingerprint of the custom
   provider declaration that produced it, and is used only while that fingerprint matches
   the current declaration. Previously the fingerprint lived in a separate key, so a reload
