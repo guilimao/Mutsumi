@@ -85,7 +85,8 @@
         "commands": [
             {
                 "command": "mutsumi.newAgent",
-                "title": "%command.newAgent.title%"
+                "title": "%command.newAgent.title%",
+                "icon": "$(add)"
             },
             {
                 "command": "mutsumi.openAgentFile",
@@ -244,6 +245,11 @@
         ],
         "menus": {
             "view/title": [
+                {
+                    "command": "mutsumi.newAgent",
+                    "when": "view == mutsumi.agentSidebar",
+                    "group": "navigation"
+                },
                 {
                     "command": "mutsumi.refreshContextTree",
                     "when": "view == mutsumi.contextSidebar",
